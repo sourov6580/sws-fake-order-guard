@@ -2,8 +2,8 @@
 /**
  * Plugin Name:       SWS Fake Order Guard
  * Plugin URI:        https://sabbirwebsolutions.com
- * Description:       WooCommerce ফেক অর্ডার প্রতিরোধ: মোবাইল নম্বর যাচাই, একই নম্বর/IP থেকে নির্দিষ্ট সময়ে অর্ডারের লিমিট, ফোন নম্বর ব্লকলিস্ট, এবং টেস্ট/এলোমেলো লেখা দিয়ে অর্ডার ব্লক।
- * Version:           1.3.0
+ * Description:       WooCommerce ফেক অর্ডার প্রতিরোধ: মোবাইল নম্বর যাচাই, একই নম্বর/IP থেকে নির্দিষ্ট সময়ে অর্ডারের লিমিট, ফোন নম্বর ব্লকলিস্ট,, টেস্ট/এলোমেলো লেখা দিয়ে অর্ডার ব্লক, এবং শুধু যাচাই করা অর্ডারে Facebook Purchase ইভেন্ট (Conversions API)।
+ * Version:           1.4.0
  * Author:            Sabbir Web Solutions
  * Author URI:        https://sabbirwebsolutions.com
  * Requires at least: 6.0
@@ -20,7 +20,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 final class SWS_Fake_Order_Guard {
 
 	const OPT     = 'sws_fog_settings';
-	const VERSION = '1.3.0';
+	const VERSION = '1.4.0';
+	const CAPI_VER = 'v22.0';
 	const BL      = 'sws_fog_blocklist';
 	const PER_PAGE = 50;
 
@@ -66,6 +67,15 @@ final class SWS_Fake_Order_Guard {
 
 		// Single order screen.
 		add_action( 'woocommerce_admin_order_data_after_billing_address', array( $this, 'order_screen_box' ) );
+
+		// Verified Purchase: Meta Conversions API.
+		add_action( 'woocommerce_checkout_order_processed', array( $this, 'capture_tracking' ), 20, 1 );
+		add_action( 'woocommerce_store_api_checkout_order_processed', array( $this, 'capture_tracking' ), 20, 1 );
+		add_action( 'woocommerce_order_status_changed', array( $this, 'maybe_queue_purchase' ), 20, 4 );
+		add_action( 'sws_fog_capi_send', array( $this, 'send_purchase' ), 10, 1 );
+		add_filter( 'woocommerce_order_actions', array( $this, 'order_action' ) );
+		add_action( 'woocommerce_order_action_sws_fog_capi_send', array( $this, 'order_action_run' ) );
+		add_action( 'wp_head', array( $this, 'purchase_guard' ), 0 );
 	}
 
 	/* ---------------------------------------------------------------- settings */
@@ -86,6 +96,12 @@ final class SWS_Fake_Order_Guard {
 			'msg_ip'         => 'আপনার অর্ডারটি গ্রহণ করা যায়নি। সমস্যাটি সমাধানে যোগাযোগ করুনঃ {contact}',
 			'msg_block'      => 'দুঃখিত, এই নম্বর থেকে অর্ডার গ্রহণ করা সম্ভব নয়। প্রয়োজনে যোগাযোগ করুনঃ {contact}',
 			'msg_junk'       => 'অনুগ্রহ করে আপনার সঠিক নাম ও পূর্ণ ঠিকানা লিখুন। টেস্ট বা এলোমেলো লেখা দিয়ে অর্ডার করা যাবে না।',
+			'capi_enabled'   => 0,
+			'capi_pixel'     => '',
+			'capi_token'     => '',
+			'capi_test'      => '',
+			'capi_status'    => array( 'completed' ),
+			'capi_guard'     => 1,
 		);
 	}
 
@@ -133,7 +149,16 @@ final class SWS_Fake_Order_Guard {
 			'phone_limit'    => max( 0, min( 100, (int) ( $in['phone_limit'] ?? $d['phone_limit'] ) ) ),
 			'ip_limit'       => max( 0, min( 100, (int) ( $in['ip_limit'] ?? $d['ip_limit'] ) ) ),
 			'contact'        => sanitize_text_field( $in['contact'] ?? '' ),
+			'capi_enabled'   => empty( $in['capi_enabled'] ) ? 0 : 1,
+			'capi_pixel'     => preg_replace( '/[^0-9]/', '', (string) ( $in['capi_pixel'] ?? '' ) ),
+			'capi_token'     => preg_replace( '/[^A-Za-z0-9_\-]/', '', (string) ( $in['capi_token'] ?? '' ) ),
+			'capi_test'      => sanitize_text_field( $in['capi_test'] ?? '' ),
+			'capi_status'    => array_values( array_intersect( array( 'processing', 'completed' ), (array) ( $in['capi_status'] ?? array() ) ) ),
+			'capi_guard'     => empty( $in['capi_guard'] ) ? 0 : 1,
 		);
+		if ( ! $out['capi_status'] ) {
+			$out['capi_status'] = array( 'completed' );
+		}
 		foreach ( array( 'msg_phone', 'msg_dup', 'msg_ip', 'msg_block', 'msg_junk' ) as $k ) {
 			$v         = sanitize_textarea_field( $in[ $k ] ?? '' );
 			$out[ $k ] = '' === trim( $v ) ? $d[ $k ] : $v;
@@ -167,6 +192,20 @@ final class SWS_Fake_Order_Guard {
 					<tr><th scope="row"><label for="fog-m3">একই IP-এর লিমিট মেসেজ</label></th><td><textarea id="fog-m3" rows="2" class="large-text" name="<?php echo esc_attr( $n ); ?>[msg_ip]"><?php echo esc_textarea( $o['msg_ip'] ); ?></textarea></td></tr>
 					<tr><th scope="row"><label for="fog-m4">ব্লকড নম্বরের মেসেজ</label></th><td><textarea id="fog-m4" rows="2" class="large-text" name="<?php echo esc_attr( $n ); ?>[msg_block]"><?php echo esc_textarea( $o['msg_block'] ); ?></textarea></td></tr>
 					<tr><th scope="row"><label for="fog-m5">টেস্ট/এলোমেলো লেখার মেসেজ</label></th><td><textarea id="fog-m5" rows="2" class="large-text" name="<?php echo esc_attr( $n ); ?>[msg_junk]"><?php echo esc_textarea( $o['msg_junk'] ); ?></textarea><p class="description">যেকোনো মেসেজে <code>{contact}</code> = যোগাযোগের নম্বর, <code>{wait}</code> = বাকি সময় (যেমন "৩ ঘণ্টা ২০ মিনিট")।</p></td></tr>
+				</table>
+				<h2 style="margin-top:30px">যাচাই করা অর্ডারে Facebook Purchase (Conversions API)</h2>
+				<p style="max-width:820px">ক্যাশ অন ডেলিভারি বা ম্যানুয়াল বিকাশ/নগদে অর্ডার হলেই Purchase ইভেন্ট গেলে ফেক অর্ডারও Facebook-এ "সেল" হিসেবে গোনা হয়, আর অ্যাড ভুল অডিয়েন্স শেখে। এটা চালু করলে Purchase ইভেন্ট যাবে শুধু তখন, যখন আপনি অর্ডার যাচাই করে নিচের স্ট্যাটাসে নেবেন। ইভেন্ট সার্ভার থেকে সরাসরি Meta-তে যায়, তাই অ্যাড ব্লকারেও আটকায় না।</p>
+				<table class="form-table" role="presentation">
+					<tr><th scope="row">চালু করুন</th><td><label><input type="checkbox" name="<?php echo esc_attr( $n ); ?>[capi_enabled]" value="1" <?php checked( $o['capi_enabled'], 1 ); ?>> যাচাই করা অর্ডারে Purchase ইভেন্ট পাঠান</label></td></tr>
+					<tr><th scope="row"><label for="fog-px">Pixel (Dataset) ID</label></th><td><input id="fog-px" type="text" class="regular-text" name="<?php echo esc_attr( $n ); ?>[capi_pixel]" value="<?php echo esc_attr( $o['capi_pixel'] ); ?>" placeholder="123456789012345"></td></tr>
+					<tr><th scope="row"><label for="fog-tk">Conversions API Access Token</label></th><td><input id="fog-tk" type="password" autocomplete="off" class="large-text" style="max-width:520px" name="<?php echo esc_attr( $n ); ?>[capi_token]" value="<?php echo esc_attr( $o['capi_token'] ); ?>"><p class="description">Events Manager → আপনার Pixel → Settings → Conversions API → <b>Generate access token</b>।</p></td></tr>
+					<tr><th scope="row">কোন স্ট্যাটাসে পাঠাবে</th><td>
+						<?php foreach ( array( 'completed' => 'Completed', 'processing' => 'Processing' ) as $sk => $sl ) : ?>
+							<label style="margin-right:16px"><input type="checkbox" name="<?php echo esc_attr( $n ); ?>[capi_status][]" value="<?php echo esc_attr( $sk ); ?>" <?php checked( in_array( $sk, (array) $o['capi_status'], true ) ); ?>> <?php echo esc_html( $sl ); ?></label>
+						<?php endforeach; ?>
+						<p class="description">অর্ডার প্রথমবার এই স্ট্যাটাসে গেলে একবারই ইভেন্ট যাবে। On-hold, Pending, Cancelled বা Failed অর্ডারে কখনো যাবে না।</p></td></tr>
+					<tr><th scope="row">ব্রাউজার Purchase আটকান</th><td><label><input type="checkbox" name="<?php echo esc_attr( $n ); ?>[capi_guard]" value="1" <?php checked( $o['capi_guard'], 1 ); ?>> যাচাই না হওয়া অর্ডারের থ্যাংক-ইউ পেজে অন্য প্লাগইনের ব্রাউজার Purchase ইভেন্ট আটকান</label><p class="description">PixelYourSite, Facebook for WooCommerce ইত্যাদির ব্রাউজার (fbq) Purchase আটকাবে। তবে ওদের <b>সার্ভার-সাইড</b> Purchase আটকানো যায় না, তাই সবচেয়ে ভালো হলো ওই প্লাগইনে Purchase ইভেন্ট বন্ধ করে দেওয়া। বাকি ইভেন্ট (PageView, AddToCart, InitiateCheckout) আগের মতোই চলবে।</p></td></tr>
+					<tr><th scope="row"><label for="fog-te">Test Event Code</label></th><td><input id="fog-te" type="text" class="regular-text" name="<?php echo esc_attr( $n ); ?>[capi_test]" value="<?php echo esc_attr( $o['capi_test'] ); ?>" placeholder="TEST12345"><p class="description">শুধু টেস্টের সময় দিন (Events Manager → Test events)। টেস্ট শেষে অবশ্যই খালি করুন।</p></td></tr>
 				</table>
 				<?php submit_button( 'সেভ করুন' ); ?>
 			</form>
@@ -849,6 +888,220 @@ final class SWS_Fake_Order_Guard {
 		if ( '' !== $ip ) {
 			self::record( 'sws_fog_i_' . md5( $ip ), $order_id );
 		}
+	}
+	/* ---------------------------------------------------------------- verified purchase (Meta CAPI) */
+
+	private static function capi_ready() {
+		return self::get( 'capi_enabled' ) && '' !== (string) self::get( 'capi_pixel' ) && '' !== (string) self::get( 'capi_token' );
+	}
+
+	private static function verified_statuses() {
+		$s = (array) self::get( 'capi_status' );
+		return $s ? $s : array( 'completed' );
+	}
+
+	/** Save browser ids at checkout so the server event can be matched later. */
+	public function capture_tracking( $order ) {
+		$order = is_object( $order ) ? $order : wc_get_order( $order );
+		if ( ! $order || $order->get_meta( '_sws_fog_ua' ) ) {
+			return;
+		}
+		$c = function ( $k ) {
+			return isset( $_COOKIE[ $k ] ) ? sanitize_text_field( wp_unslash( $_COOKIE[ $k ] ) ) : ''; // phpcs:ignore
+		};
+		$order->update_meta_data( '_sws_fog_fbp', $c( '_fbp' ) );
+		$order->update_meta_data( '_sws_fog_fbc', $c( '_fbc' ) );
+		$order->update_meta_data( '_sws_fog_ip', self::ip() );
+		$order->update_meta_data( '_sws_fog_ua', isset( $_SERVER['HTTP_USER_AGENT'] ) ? substr( sanitize_text_field( wp_unslash( $_SERVER['HTTP_USER_AGENT'] ) ), 0, 400 ) : '-' ); // phpcs:ignore
+		$ref = wp_get_referer();
+		$order->update_meta_data( '_sws_fog_src', $ref ? esc_url_raw( $ref ) : home_url( '/' ) );
+		$order->save();
+	}
+
+	public function maybe_queue_purchase( $order_id, $from, $to, $order ) {
+		if ( ! self::capi_ready() || ! in_array( $to, self::verified_statuses(), true ) ) {
+			return;
+		}
+		$order = $order ? $order : wc_get_order( $order_id );
+		if ( ! $order || $order->get_meta( '_sws_fog_capi_sent' ) ) {
+			return;
+		}
+		if ( function_exists( 'as_enqueue_async_action' ) ) {
+			as_enqueue_async_action( 'sws_fog_capi_send', array( (int) $order_id ), 'sws-fog' );
+		} else {
+			$this->send_purchase( $order_id );
+		}
+	}
+
+	public function order_action( $actions ) {
+		if ( self::capi_ready() ) {
+			$actions['sws_fog_capi_send'] = 'Facebook-এ Purchase ইভেন্ট পাঠান (Fake Order Guard)';
+		}
+		return $actions;
+	}
+
+	public function order_action_run( $order ) {
+		$this->send_purchase( $order->get_id(), true );
+	}
+
+	private static function h( $v ) {
+		$v = strtolower( trim( (string) $v ) );
+		return '' === $v ? '' : hash( 'sha256', $v );
+	}
+
+	private static function build_event( $order ) {
+		$phone = self::normalize_phone( $order->get_billing_phone() );
+		$ct    = preg_replace( '/[^a-z]/', '', strtolower( (string) $order->get_billing_city() ) );
+		$fbc   = (string) $order->get_meta( '_sws_fog_fbc' );
+		if ( '' === $fbc ) {
+			$entry = (string) $order->get_meta( '_wc_order_attribution_session_entry' );
+			if ( $entry && preg_match( '/[?&]fbclid=([^&#]+)/', $entry, $m ) ) {
+				$created = $order->get_date_created();
+				$fbc     = 'fb.1.' . ( ( $created ? $created->getTimestamp() : time() ) * 1000 ) . '.' . rawurldecode( $m[1] );
+			}
+		}
+		$ip   = (string) $order->get_meta( '_sws_fog_ip' );
+		$ua   = (string) $order->get_meta( '_sws_fog_ua' );
+		$user = array(
+			'em'                => array( self::h( $order->get_billing_email() ) ),
+			'ph'                => array( self::is_valid_phone( $phone ) ? self::h( '88' . $phone ) : '' ),
+			'fn'                => array( self::h( $order->get_billing_first_name() ) ),
+			'ln'                => array( self::h( $order->get_billing_last_name() ) ),
+			'ct'                => array( self::h( $ct ) ),
+			'country'           => array( self::h( $order->get_billing_country() ? $order->get_billing_country() : 'bd' ) ),
+			'external_id'       => array( self::h( $order->get_customer_id() ? 'u' . $order->get_customer_id() : $order->get_billing_email() ) ),
+			'client_ip_address' => '' !== $ip ? $ip : (string) $order->get_customer_ip_address(),
+			'client_user_agent' => ( '' !== $ua && '-' !== $ua ) ? $ua : (string) $order->get_customer_user_agent(),
+			'fbp'               => (string) $order->get_meta( '_sws_fog_fbp' ),
+			'fbc'               => $fbc,
+		);
+		foreach ( $user as $k => $v ) {
+			if ( is_array( $v ) ) {
+				$v = array_values( array_filter( $v ) );
+			}
+			if ( empty( $v ) ) {
+				unset( $user[ $k ] );
+			} else {
+				$user[ $k ] = $v;
+			}
+		}
+
+		$contents = array();
+		$ids      = array();
+		$qty      = 0;
+		foreach ( $order->get_items() as $item ) {
+			$pid        = (string) ( $item->get_variation_id() ? $item->get_variation_id() : $item->get_product_id() );
+			$q          = (int) $item->get_quantity();
+			$ids[]      = $pid;
+			$qty       += $q;
+			$contents[] = array( 'id' => $pid, 'quantity' => $q, 'item_price' => round( (float) $order->get_item_total( $item, true ), 2 ) );
+		}
+
+		$created = $order->get_date_created();
+		$t       = $created ? $created->getTimestamp() : time();
+		if ( time() - $t > 6 * DAY_IN_SECONDS ) {
+			$t = time(); // Meta rejects events older than 7 days.
+		}
+		$event_id = (string) $order->get_meta( '_pys_purchase_event_id' ); // dedupe with PixelYourSite if its browser event fired.
+		if ( '' === $event_id ) {
+			$event_id = 'sws_fog_purchase_' . $order->get_id();
+		}
+
+		return array(
+			'event_name'       => 'Purchase',
+			'event_time'       => $t,
+			'event_id'         => $event_id,
+			'action_source'    => 'website',
+			'event_source_url' => (string) ( $order->get_meta( '_sws_fog_src' ) ? $order->get_meta( '_sws_fog_src' ) : home_url( '/' ) ),
+			'user_data'        => $user,
+			'custom_data'      => array(
+				'currency'     => $order->get_currency(),
+				'value'        => round( (float) $order->get_total(), 2 ),
+				'content_type' => 'product',
+				'content_ids'  => array_values( array_unique( $ids ) ),
+				'contents'     => $contents,
+				'num_items'    => $qty,
+				'order_id'     => (string) $order->get_order_number(),
+			),
+		);
+	}
+
+	public function send_purchase( $order_id, $force = false ) {
+		$order = wc_get_order( $order_id );
+		if ( ! $order || ! self::capi_ready() ) {
+			return;
+		}
+		if ( ! $force && ( $order->get_meta( '_sws_fog_capi_sent' ) || ! $order->has_status( self::verified_statuses() ) ) ) {
+			return;
+		}
+		$body = array(
+			'data'         => array( self::build_event( $order ) ),
+			'access_token' => (string) self::get( 'capi_token' ),
+		);
+		$test = trim( (string) self::get( 'capi_test' ) );
+		if ( '' !== $test ) {
+			$body['test_event_code'] = $test;
+		}
+		$ver = apply_filters( 'sws_fog_capi_version', self::CAPI_VER );
+		$res = wp_remote_post( 'https://graph.facebook.com/' . $ver . '/' . rawurlencode( (string) self::get( 'capi_pixel' ) ) . '/events', array(
+			'timeout' => 15,
+			'headers' => array( 'Content-Type' => 'application/json' ),
+			'body'    => wp_json_encode( $body ),
+		) );
+		if ( is_wp_error( $res ) ) {
+			$order->add_order_note( 'Fake Order Guard: Facebook Purchase পাঠানো যায়নি — ' . $res->get_error_message() );
+			return;
+		}
+		$json = json_decode( wp_remote_retrieve_body( $res ), true );
+		if ( 200 === (int) wp_remote_retrieve_response_code( $res ) && ! empty( $json['events_received'] ) ) {
+			$order->update_meta_data( '_sws_fog_capi_sent', time() );
+			$order->save();
+			$order->add_order_note( 'Fake Order Guard: যাচাই করা অর্ডার — Facebook-এ Purchase ইভেন্ট পাঠানো হয়েছে (' . $order->get_currency() . ' ' . $order->get_total() . ')' . ( '' !== $test ? ' [Test]' : '' ) . '।' );
+		} else {
+			$err = isset( $json['error']['message'] ) ? $json['error']['message'] : wp_remote_retrieve_body( $res );
+			$order->add_order_note( 'Fake Order Guard: Facebook Purchase পাঠানো যায়নি — ' . substr( wp_strip_all_tags( (string) $err ), 0, 300 ) );
+		}
+	}
+
+	/** Order shown on the current thank-you page (WooCommerce or CartFlows), key-checked. */
+	private static function thankyou_order() {
+		if ( ! function_exists( 'wc_get_order' ) ) {
+			return false;
+		}
+		$id = 0;
+		if ( function_exists( 'is_wc_endpoint_url' ) && is_wc_endpoint_url( 'order-received' ) ) {
+			$id = absint( get_query_var( 'order-received' ) );
+		}
+		foreach ( array( 'wcf-order', 'order-received', 'order_id' ) as $k ) {
+			if ( ! $id && ! empty( $_GET[ $k ] ) ) { // phpcs:ignore
+				$id = absint( $_GET[ $k ] ); // phpcs:ignore
+			}
+		}
+		if ( ! $id ) {
+			return false;
+		}
+		$key = '';
+		foreach ( array( 'key', 'wcf-key' ) as $k ) {
+			if ( '' === $key && ! empty( $_GET[ $k ] ) ) { // phpcs:ignore
+				$key = sanitize_text_field( wp_unslash( $_GET[ $k ] ) ); // phpcs:ignore
+			}
+		}
+		$order = wc_get_order( $id );
+		return ( $order && '' !== $key && hash_equals( (string) $order->get_order_key(), $key ) ) ? $order : false;
+	}
+
+	/** Drop browser fbq Purchase calls on the thank-you page of an unverified order. */
+	public function purchase_guard() {
+		if ( is_admin() || ! self::get( 'capi_enabled' ) || ! self::get( 'capi_guard' ) ) {
+			return;
+		}
+		$order = self::thankyou_order();
+		if ( ! $order || $order->has_status( self::verified_statuses() ) ) {
+			return;
+		}
+		?>
+<script id="sws-fog-purchase-guard">(function(w){if(typeof Proxy==='undefined')return;function g(f){if(typeof f!=='function'||f.__swsFog)return f;try{f.__swsFog=1;}catch(e){}return new Proxy(f,{apply:function(t,s,a){var n=a[0]==='track'?a[1]:(a[0]==='trackSingle'?a[2]:null);if(n==='Purchase')return;return Reflect.apply(t,s,a);}});}if(w.fbq){w.fbq=g(w.fbq);return;}var c;try{Object.defineProperty(w,'fbq',{configurable:true,get:function(){return c;},set:function(v){c=g(v);}});}catch(e){}})(window);</script>
+		<?php
 	}
 }
 
