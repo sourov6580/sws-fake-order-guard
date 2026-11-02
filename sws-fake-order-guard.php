@@ -2,8 +2,8 @@
 /**
  * Plugin Name:       SWS Fake Order Guard
  * Plugin URI:        https://sabbirwebsolutions.com
- * Description:       WooCommerce ফেক অর্ডার প্রতিরোধ: মোবাইল নম্বর যাচাই, একই নম্বর/IP থেকে নির্দিষ্ট সময়ে অর্ডারের লিমিট, এবং ফোন নম্বর ব্লকলিস্ট (অর্ডার লিস্ট থেকে এক ক্লিকে ব্লক/আনব্লক)।
- * Version:           1.2.0
+ * Description:       WooCommerce ফেক অর্ডার প্রতিরোধ: মোবাইল নম্বর যাচাই, একই নম্বর/IP থেকে নির্দিষ্ট সময়ে অর্ডারের লিমিট, ফোন নম্বর ব্লকলিস্ট, এবং টেস্ট/এলোমেলো লেখা দিয়ে অর্ডার ব্লক।
+ * Version:           1.3.0
  * Author:            Sabbir Web Solutions
  * Author URI:        https://sabbirwebsolutions.com
  * Requires at least: 6.0
@@ -20,7 +20,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 final class SWS_Fake_Order_Guard {
 
 	const OPT     = 'sws_fog_settings';
-	const VERSION = '1.2.0';
+	const VERSION = '1.3.0';
 	const BL      = 'sws_fog_blocklist';
 	const PER_PAGE = 50;
 
@@ -74,6 +74,9 @@ final class SWS_Fake_Order_Guard {
 		return array(
 			'enabled'        => 1,
 			'validate_phone' => 1,
+			'block_test'     => 1,
+			'junk_words'     => "test\ntesting\ntester\ntst\ndemo\ndummy\nasdf\nasd\nqwe\nqwerty\nটেস্ট\nটেষ্ট\nটেস্টিং\nটেষ্টিং\nপরীক্ষা\nপরীক্ষামূলক\nডেমো\nভুয়া",
+			'block_gibberish'=> 1,
 			'window_hours'   => 12,
 			'phone_limit'    => 1,
 			'ip_limit'       => 1,
@@ -82,6 +85,7 @@ final class SWS_Fake_Order_Guard {
 			'msg_dup'        => 'একটু অপেক্ষা করুন, আপনি সম্প্রতি একটি অর্ডার করেছেন। প্রয়োজনে যোগাযোগ করুনঃ {contact}',
 			'msg_ip'         => 'আপনার অর্ডারটি গ্রহণ করা যায়নি। সমস্যাটি সমাধানে যোগাযোগ করুনঃ {contact}',
 			'msg_block'      => 'দুঃখিত, এই নম্বর থেকে অর্ডার গ্রহণ করা সম্ভব নয়। প্রয়োজনে যোগাযোগ করুনঃ {contact}',
+			'msg_junk'       => 'অনুগ্রহ করে আপনার সঠিক নাম ও পূর্ণ ঠিকানা লিখুন। টেস্ট বা এলোমেলো লেখা দিয়ে অর্ডার করা যাবে না।',
 		);
 	}
 
@@ -122,12 +126,15 @@ final class SWS_Fake_Order_Guard {
 		$out = array(
 			'enabled'        => empty( $in['enabled'] ) ? 0 : 1,
 			'validate_phone' => empty( $in['validate_phone'] ) ? 0 : 1,
+			'block_test'     => empty( $in['block_test'] ) ? 0 : 1,
+			'block_gibberish'=> empty( $in['block_gibberish'] ) ? 0 : 1,
+			'junk_words'     => '' === trim( (string) ( $in['junk_words'] ?? '' ) ) ? $d['junk_words'] : sanitize_textarea_field( $in['junk_words'] ),
 			'window_hours'   => max( 0.25, min( 720, (float) ( $in['window_hours'] ?? $d['window_hours'] ) ) ),
 			'phone_limit'    => max( 0, min( 100, (int) ( $in['phone_limit'] ?? $d['phone_limit'] ) ) ),
 			'ip_limit'       => max( 0, min( 100, (int) ( $in['ip_limit'] ?? $d['ip_limit'] ) ) ),
 			'contact'        => sanitize_text_field( $in['contact'] ?? '' ),
 		);
-		foreach ( array( 'msg_phone', 'msg_dup', 'msg_ip', 'msg_block' ) as $k ) {
+		foreach ( array( 'msg_phone', 'msg_dup', 'msg_ip', 'msg_block', 'msg_junk' ) as $k ) {
 			$v         = sanitize_textarea_field( $in[ $k ] ?? '' );
 			$out[ $k ] = '' === trim( $v ) ? $d[ $k ] : $v;
 		}
@@ -148,7 +155,9 @@ final class SWS_Fake_Order_Guard {
 				<?php settings_fields( 'sws_fog_group' ); ?>
 				<table class="form-table" role="presentation">
 					<tr><th scope="row">গার্ড চালু</th><td><label><input type="checkbox" name="<?php echo esc_attr( $n ); ?>[enabled]" value="1" <?php checked( $o['enabled'], 1 ); ?>> অর্ডার লিমিট চালু রাখুন</label></td></tr>
-					<tr><th scope="row">মোবাইল নম্বর যাচাই</th><td><label><input type="checkbox" name="<?php echo esc_attr( $n ); ?>[validate_phone]" value="1" <?php checked( $o['validate_phone'], 1 ); ?>> ০১ দিয়ে শুরু ১১ সংখ্যার বাংলাদেশি নম্বর বাধ্যতামূলক</label></td></tr>
+					<tr><th scope="row">মোবাইল নম্বর যাচাই</th><td><label><input type="checkbox" name="<?php echo esc_attr( $n ); ?>[validate_phone]" value="1" <?php checked( $o['validate_phone'], 1 ); ?>> ০১ দিয়ে শুরু ১১ সংখ্যার বাংলাদেশি নম্বর বাধ্যতামূলক</label><p class="description">ভুয়া প্যাটার্নের নম্বরও বাতিল হবে: ভুল অপারেটর কোড (010/011/012), সিরিয়াল ডিজিট (01312345678, 01987654321), একই ডিজিট বারবার (01700000000) বা জোড়া পুনরাবৃত্তি (01712121212)।</p></td></tr>
+					<tr><th scope="row"><label for="fog-jw">টেস্ট অর্ডার ব্লক</label></th><td><label><input type="checkbox" name="<?php echo esc_attr( $n ); ?>[block_test]" value="1" <?php checked( $o['block_test'], 1 ); ?>> নাম, ঠিকানা, ইমেইল বা নোটে নিচের কোনো শব্দ থাকলে অর্ডার হবে না</label><br><textarea id="fog-jw" rows="5" class="large-text" style="max-width:420px;margin-top:8px" name="<?php echo esc_attr( $n ); ?>[junk_words]"><?php echo esc_textarea( $o['junk_words'] ); ?></textarea><p class="description">প্রতি লাইনে একটি শব্দ বা বাক্যাংশ। বড়/ছোট হাতের অক্ষর আর অক্ষর দ্বিগুণ লেখা (যেমন TEST, teest, test123) সবই ধরা পড়বে। পুরো শব্দ মিললেই ব্লক হবে, তাই "contest" বা "Testament" এর মতো শব্দ আটকাবে না।</p></td></tr>
+					<tr><th scope="row">এলোমেলো লেখা ব্লক</th><td><label><input type="checkbox" name="<?php echo esc_attr( $n ); ?>[block_gibberish]" value="1" <?php checked( $o['block_gibberish'], 1 ); ?>> নাম ও ঠিকানায় এলোমেলো অক্ষর দিলে অর্ডার হবে না</label><p class="description">যেমন: asdfgh, sdfgh, kkkkk, ককককক, অথবা অক্ষর ছাড়া শুধু সংখ্যা/চিহ্ন (123, ...)।</p></td></tr>
 					<tr><th scope="row"><label for="fog-win">সময়সীমা (ঘণ্টা)</label></th><td><input id="fog-win" type="number" min="0.25" max="720" step="0.25" class="small-text" name="<?php echo esc_attr( $n ); ?>[window_hours]" value="<?php echo esc_attr( $o['window_hours'] ); ?>"><p class="description">এই সময়ের মধ্যে লিমিট গোনা হবে। যেমন 12 = ১২ ঘণ্টা।</p></td></tr>
 					<tr><th scope="row"><label for="fog-pl">একই নম্বরে সর্বোচ্চ অর্ডার</label></th><td><input id="fog-pl" type="number" min="0" max="100" class="small-text" name="<?php echo esc_attr( $n ); ?>[phone_limit]" value="<?php echo esc_attr( $o['phone_limit'] ); ?>"><p class="description">0 দিলে নম্বরের লিমিট বন্ধ থাকবে।</p></td></tr>
 					<tr><th scope="row"><label for="fog-il">একই IP-তে সর্বোচ্চ অর্ডার</label></th><td><input id="fog-il" type="number" min="0" max="100" class="small-text" name="<?php echo esc_attr( $n ); ?>[ip_limit]" value="<?php echo esc_attr( $o['ip_limit'] ); ?>"><p class="description">0 দিলে IP লিমিট বন্ধ থাকবে।</p></td></tr>
@@ -156,7 +165,8 @@ final class SWS_Fake_Order_Guard {
 					<tr><th scope="row"><label for="fog-m1">ভুল নম্বরের মেসেজ</label></th><td><textarea id="fog-m1" rows="2" class="large-text" name="<?php echo esc_attr( $n ); ?>[msg_phone]"><?php echo esc_textarea( $o['msg_phone'] ); ?></textarea></td></tr>
 					<tr><th scope="row"><label for="fog-m2">একই নম্বরের লিমিট মেসেজ</label></th><td><textarea id="fog-m2" rows="2" class="large-text" name="<?php echo esc_attr( $n ); ?>[msg_dup]"><?php echo esc_textarea( $o['msg_dup'] ); ?></textarea></td></tr>
 					<tr><th scope="row"><label for="fog-m3">একই IP-এর লিমিট মেসেজ</label></th><td><textarea id="fog-m3" rows="2" class="large-text" name="<?php echo esc_attr( $n ); ?>[msg_ip]"><?php echo esc_textarea( $o['msg_ip'] ); ?></textarea></td></tr>
-					<tr><th scope="row"><label for="fog-m4">ব্লকড নম্বরের মেসেজ</label></th><td><textarea id="fog-m4" rows="2" class="large-text" name="<?php echo esc_attr( $n ); ?>[msg_block]"><?php echo esc_textarea( $o['msg_block'] ); ?></textarea><p class="description">যেকোনো মেসেজে <code>{contact}</code> = যোগাযোগের নম্বর, <code>{wait}</code> = বাকি সময় (যেমন "৩ ঘণ্টা ২০ মিনিট")।</p></td></tr>
+					<tr><th scope="row"><label for="fog-m4">ব্লকড নম্বরের মেসেজ</label></th><td><textarea id="fog-m4" rows="2" class="large-text" name="<?php echo esc_attr( $n ); ?>[msg_block]"><?php echo esc_textarea( $o['msg_block'] ); ?></textarea></td></tr>
+					<tr><th scope="row"><label for="fog-m5">টেস্ট/এলোমেলো লেখার মেসেজ</label></th><td><textarea id="fog-m5" rows="2" class="large-text" name="<?php echo esc_attr( $n ); ?>[msg_junk]"><?php echo esc_textarea( $o['msg_junk'] ); ?></textarea><p class="description">যেকোনো মেসেজে <code>{contact}</code> = যোগাযোগের নম্বর, <code>{wait}</code> = বাকি সময় (যেমন "৩ ঘণ্টা ২০ মিনিট")।</p></td></tr>
 				</table>
 				<?php submit_button( 'সেভ করুন' ); ?>
 			</form>
@@ -548,6 +558,38 @@ final class SWS_Fake_Order_Guard {
 		return $digits;
 	}
 
+	/**
+	 * Fake-looking number: wrong operator code (010/011/012) or a made-up
+	 * subscriber part like 12345678, 87654321, 00000000, 12121212.
+	 */
+	public static function is_fake_phone( $d ) {
+		if ( ! self::is_valid_phone( $d ) ) {
+			return true;
+		}
+		if ( ! preg_match( '/^01[3-9]/', $d ) ) {
+			return true;
+		}
+		$sub = substr( $d, 3 ); // 8 digits after operator code.
+		if ( preg_match( '/(\d)\1{5,}/', $sub ) ) {
+			return true; // same digit 6+ times in a row.
+		}
+		if ( substr( $sub, 0, 2 ) === substr( $sub, 2, 2 ) && substr( $sub, 0, 4 ) === substr( $sub, 4, 4 ) ) {
+			return true; // 12121212 style.
+		}
+		$up   = 1;
+		$down = 1;
+		for ( $i = 1; $i < 8; $i++ ) {
+			$a    = (int) $sub[ $i - 1 ];
+			$b    = (int) $sub[ $i ];
+			$up   = ( ( $a + 1 ) % 10 === $b ) ? $up + 1 : 1;
+			$down = ( ( $a + 9 ) % 10 === $b ) ? $down + 1 : 1;
+			if ( $up >= 6 || $down >= 6 ) {
+				return true; // 6+ digits in sequence: 123456, 987654, 789012.
+			}
+		}
+		return false;
+	}
+
 	public static function is_valid_phone( $d ) {
 		return 11 === strlen( $d ) && '01' === substr( $d, 0, 2 );
 	}
@@ -634,9 +676,95 @@ final class SWS_Fake_Order_Guard {
 		set_transient( $key, $list, self::window() + 60 );
 	}
 
+	/* ---------------------------------------------------------------- junk / test text */
+
+	/** Lowercase and collapse repeated letters: "TEEST" -> "test". */
+	private static function squeeze( $s ) {
+		$s = function_exists( 'mb_strtolower' ) ? mb_strtolower( (string) $s, 'UTF-8' ) : strtolower( (string) $s );
+		return (string) preg_replace( '/(\p{L})\1+/u', '$1', $s );
+	}
+
+	private static function junk_words() {
+		$out = array();
+		foreach ( (array) preg_split( '/[\r\n,]+/u', (string) self::get( 'junk_words' ) ) as $w ) {
+			$w = trim( self::squeeze( $w ) );
+			if ( '' !== $w ) {
+				$out[] = $w;
+			}
+		}
+		return array_unique( $out );
+	}
+
+	public static function has_test_word( $text ) {
+		$t = self::squeeze( $text );
+		foreach ( self::junk_words() as $w ) {
+			$q = str_replace( '\ ', '\s+', preg_quote( $w, '/' ) );
+			$q = preg_replace( '/\s+/u', '\\s+', $q );
+			if ( preg_match( '/(?<![\p{L}\p{M}])' . $q . '(?![\p{L}\p{M}])/u', $t ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	public static function is_gibberish( $text ) {
+		$t = function_exists( 'mb_strtolower' ) ? mb_strtolower( trim( (string) $text ), 'UTF-8' ) : strtolower( trim( (string) $text ) );
+		if ( '' === $t ) {
+			return false;
+		}
+		if ( ! preg_match( '/\p{L}/u', $t ) ) {
+			return true; // only digits / symbols.
+		}
+		if ( preg_match( '/(\p{L}\p{M}*)\1{3,}/u', $t ) ) {
+			return true; // same letter 4+ times: aaaa, কককক.
+		}
+		foreach ( array( 'asdf', 'sdfg', 'dfgh', 'fghj', 'ghjk', 'hjkl', 'qwer', 'zxcv', 'xcvb', 'cvbn', 'vbnm', 'uiop' ) as $k ) {
+			if ( false !== strpos( $t, $k ) ) {
+				return true; // keyboard row mashing.
+			}
+		}
+		foreach ( (array) preg_split( '/[^a-z]+/', $t ) as $w ) {
+			if ( strlen( $w ) >= 5 && ! preg_match( '/[aeiouy]/', $w ) ) {
+				return true; // no vowel: sdfgh, bcdfk.
+			}
+			if ( preg_match( '/[bcdfghjklmnpqrstvwxz]{6,}/', $w ) ) {
+				return true; // 6+ consonants in a row.
+			}
+		}
+		return false;
+	}
+
+	/** @return bool true when name/address/notes look like a test or random text. */
+	private static function junk_check( $data ) {
+		$test = (int) self::get( 'block_test' );
+		$gib  = (int) self::get( 'block_gibberish' );
+		if ( ! $test && ! $gib ) {
+			return false;
+		}
+		$gib_fields = array( 'billing_first_name', 'billing_last_name', 'billing_address_1', 'billing_city', 'shipping_first_name', 'shipping_last_name', 'shipping_address_1', 'shipping_city' );
+		$all        = array_merge( $gib_fields, array( 'billing_company', 'billing_address_2', 'billing_email', 'shipping_company', 'shipping_address_2', 'order_comments' ) );
+		foreach ( $all as $k ) {
+			$v = isset( $data[ $k ] ) ? trim( (string) $data[ $k ] ) : '';
+			if ( '' === $v ) {
+				continue;
+			}
+			if ( $test && self::has_test_word( $v ) ) {
+				return true;
+			}
+			if ( $gib && in_array( $k, $gib_fields, true ) && self::is_gibberish( $v ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	/* ---------------------------------------------------------------- checkout */
 
 	public function validate( $data, $errors ) {
+		if ( self::junk_check( (array) $data ) ) {
+			$errors->add( 'sws_fog_junk', self::msg( 'msg_junk' ) );
+			return;
+		}
 		$raw = isset( $data['billing_phone'] ) ? trim( (string) $data['billing_phone'] ) : '';
 		$on  = (int) self::get( 'enabled' );
 
@@ -646,6 +774,10 @@ final class SWS_Fake_Order_Guard {
 				if ( self::get( 'validate_phone' ) && ! $errors->get_error_message( 'billing_phone_validation' ) ) {
 					$errors->add( 'sws_fog_invalid_phone', self::msg( 'msg_phone' ) );
 				}
+				return;
+			}
+			if ( self::get( 'validate_phone' ) && self::is_fake_phone( $digits ) ) {
+				$errors->add( 'sws_fog_fake_phone', self::msg( 'msg_phone' ) );
 				return;
 			}
 			if ( self::is_blocked( $digits ) ) {
@@ -674,14 +806,31 @@ final class SWS_Fake_Order_Guard {
 
 	/** Block checkout (Store API). */
 	public function store_api_check( $order, $request ) {
+		$data = array( 'order_comments' => $order->get_customer_note() );
+		foreach ( array( 'billing', 'shipping' ) as $t ) {
+			foreach ( array( 'first_name', 'last_name', 'company', 'address_1', 'address_2', 'city' ) as $f ) {
+				$m = "get_{$t}_{$f}";
+				$data[ "{$t}_{$f}" ] = $order->$m();
+			}
+		}
+		$data['billing_email'] = $order->get_billing_email();
+		if ( self::junk_check( $data ) ) {
+			self::store_api_fail( 'sws_fog_junk', self::msg( 'msg_junk' ) );
+		}
 		$d = self::order_digits( $order );
-		if ( ! self::is_valid_phone( $d ) || ! self::is_blocked( $d ) ) {
-			return;
+		if ( '' !== $d && self::get( 'validate_phone' ) && self::is_fake_phone( $d ) ) {
+			self::store_api_fail( 'sws_fog_fake_phone', self::msg( 'msg_phone' ) );
 		}
+		if ( self::is_valid_phone( $d ) && self::is_blocked( $d ) ) {
+			self::store_api_fail( 'sws_fog_blocked', self::msg( 'msg_block' ) );
+		}
+	}
+
+	private static function store_api_fail( $code, $msg ) {
 		if ( class_exists( '\\Automattic\\WooCommerce\\StoreApi\\Exceptions\\RouteException' ) ) {
-			throw new \Automattic\WooCommerce\StoreApi\Exceptions\RouteException( 'sws_fog_blocked', self::msg( 'msg_block' ), 400 );
+			throw new \Automattic\WooCommerce\StoreApi\Exceptions\RouteException( $code, $msg, 400 );
 		}
-		throw new \Exception( self::msg( 'msg_block' ) );
+		throw new \Exception( $msg );
 	}
 
 	public function record_order( $order_id ) {
