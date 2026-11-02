@@ -16,8 +16,8 @@ WooCommerce → Fake Order Guard → **যাচাই করা অর্ডা
 ## নতুন আপডেট রিলিজ করার নিয়ম
 
 1. `sws-fake-order-guard.php` ফাইলে দুই জায়গায় ভার্সন বাড়ান: হেডারের `Version:` এবং `const VERSION`।
-2. কোড GitHub-এ push করুন (`main` ব্রাঞ্চ)।
-3. `sws-fake-order-guard` ফোল্ডারটা zip করুন — zip-এর নাম হবে `sws-fake-order-guard.zip`, ভেতরে `sws-fake-order-guard/` ফোল্ডার।
-4. GitHub → Releases → **Draft a new release** → Tag: `v1.4.0` (ভার্সনের সাথে মিলিয়ে) → zip ফাইলটা অ্যাটাচ করে **Publish release**।
+2. কোড GitHub-এর `main` ব্রাঞ্চে push করুন।
+
+ব্যস। GitHub Action (`.github/workflows/release.yml`) নিজেই `sws-fake-order-guard.zip` বানিয়ে `vX.Y.Z` নামে Release পাবলিশ করবে। ভার্সন না বাড়ালে নতুন Release হবে না।
 
 ১২ ঘণ্টার মধ্যে সব সাইটে "Update now" দেখাবে। সাথে সাথে দেখতে চাইলে Plugins পেজে প্লাগইনের নিচে **Check for updates** ক্লিক করুন।

@@ -1,0 +1,54 @@
+name: Auto release
+
+# Publishes a GitHub Release (with sws-fake-order-guard.zip) whenever the
+# plugin's Version header on main points to a version that has no release yet.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read plugin version
+        id: v
+        run: |
+          VER=$(grep -m1 -E '^\s*\*\s*Version:' sws-fake-order-guard.php | sed -E 's/.*Version:\s*//' | tr -d '[:space:]')
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "Plugin version: $VER"
+
+      - name: Check if release exists
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v${{ steps.v.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=yes" >> "$GITHUB_OUTPUT"
+            echo "Release v${{ steps.v.outputs.version }} already exists, skipping."
+          else
+            echo "exists=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build zip
+        if: steps.check.outputs.exists == 'no'
+        run: |
+          mkdir -p build/sws-fake-order-guard
+          git archive HEAD | tar -x -C build/sws-fake-order-guard
+          rm -rf build/sws-fake-order-guard/.github
+          cd build && zip -qr ../sws-fake-order-guard.zip sws-fake-order-guard
+
+      - name: Publish release
+        if: steps.check.outputs.exists == 'no'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ steps.v.outputs.version }}" sws-fake-order-guard.zip \
+            --target "${{ github.sha }}" \
+            --title "v${{ steps.v.outputs.version }}" \
+            --generate-notes
