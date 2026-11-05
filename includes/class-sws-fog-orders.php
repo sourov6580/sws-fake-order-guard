@@ -116,7 +116,7 @@ final class SWS_FOG_Orders {
 			if ( $to ) {
 				$where .= $wpdb->prepare( ' AND o.date_created_gmt < %s', $to );
 			}
-			$sql = "SELECT o.id, o.date_created_gmt AS d, b.phone, b.first_name AS fn, b.last_name AS ln, b.address_1 AS a1, b.address_2 AS a2, b.city, b.state,
+			$sql = "SELECT o.id, o.status AS st, o.date_created_gmt AS d, b.phone, b.first_name AS fn, b.last_name AS ln, b.address_1 AS a1, b.address_2 AS a2, b.city, b.state,
 				s.phone AS sphone
 				FROM $o o
 				LEFT JOIN $a b ON b.order_id = o.id AND b.address_type = 'billing'
@@ -135,7 +135,7 @@ final class SWS_FOG_Orders {
 			$meta = function ( $key, $as ) use ( $m ) {
 				return "(SELECT meta_value FROM $m WHERE post_id = p.ID AND meta_key = '$key' LIMIT 1) AS $as";
 			};
-			$sql  = 'SELECT p.ID AS id, p.post_date_gmt AS d, ' . implode(
+			$sql  = 'SELECT p.ID AS id, p.post_status AS st, p.post_date_gmt AS d, ' . implode(
 				', ',
 				array(
 					$meta( '_billing_phone', 'phone' ),
@@ -170,10 +170,13 @@ final class SWS_FOG_Orders {
 			}
 			$ts = (int) strtotime( $r->d . ' UTC' );
 			if ( ! isset( $out[ $ph ] ) ) {
-				$out[ $ph ] = array( 'phone' => $ph, 'count' => 0, 'last' => 0, 'order_id' => 0, 'name' => '', 'address' => '' );
+				$out[ $ph ] = array( 'phone' => $ph, 'count' => 0, 'done' => 0, 'last' => 0, 'order_id' => 0, 'name' => '', 'address' => '' );
 			}
 			$c = &$out[ $ph ];
 			++$c['count'];
+			if ( 'wc-completed' === $r->st ) {
+				++$c['done'];
+			}
 			if ( $ts >= $c['last'] ) {
 				$name = trim( $r->fn . ' ' . $r->ln );
 				$addr = implode( ', ', array_filter( array_map( 'trim', array( (string) $r->a1, (string) $r->a2, (string) $r->city, $r->state ? (string) self::state_name( $r->state ) : '' ) ) ) );
@@ -250,7 +253,7 @@ final class SWS_FOG_Orders {
 		header( 'Content-Disposition: attachment; filename="' . $file . '"' );
 		$fh = fopen( 'php://output', 'w' );
 		fwrite( $fh, "\xEF\xBB\xBF" ); // UTF-8 BOM so Excel shows Bangla correctly.
-		fputcsv( $fh, array( 'নাম', 'মোবাইল নম্বর', 'ঠিকানা', 'অর্ডার সংখ্যা', 'লাস্ট অর্ডার ডেট', 'কাস্টমার কোয়ালিটি' ) );
+		fputcsv( $fh, array( 'নাম', 'মোবাইল নম্বর', 'ঠিকানা', 'অর্ডার সংখ্যা', 'কমপ্লিট', 'লাস্ট অর্ডার ডেট', 'কাস্টমার কোয়ালিটি' ) );
 		foreach ( $list as $c ) {
 			fputcsv(
 				$fh,
@@ -259,6 +262,7 @@ final class SWS_FOG_Orders {
 					'="' . $c['phone'] . '"', // keep the leading 0 in Excel.
 					self::csv_safe( $c['address'] ),
 					$c['count'],
+					$c['done'],
 					wp_date( 'Y-m-d H:i', $c['last'] ),
 					isset( $qmap[ $c['phone'] ], $qs[ $qmap[ $c['phone'] ] ] ) ? $qs[ $qmap[ $c['phone'] ] ] : '',
 				)
@@ -288,6 +292,7 @@ final class SWS_FOG_Orders {
 		$qmap   = self::quality_map();
 		$qs     = self::qualities();
 		$orders = array_sum( wp_list_pluck( $list, 'count' ) );
+		$done   = array_sum( wp_list_pluck( $list, 'done' ) );
 		$base   = array(
 			'page'  => 'sws-fake-order-guard',
 			'tab'   => 'orders',
@@ -349,6 +354,7 @@ final class SWS_FOG_Orders {
 			<div class="sws-om-stats">
 				<div class="sws-om-stat"><small>কাস্টমার</small><b><?php echo (int) $total; ?></b></div>
 				<div class="sws-om-stat"><small>মোট অর্ডার</small><b><?php echo (int) $orders; ?></b></div>
+				<div class="sws-om-stat"><small>কমপ্লিট</small><b><?php echo (int) $done; ?></b></div>
 				<div class="sws-om-stat"><small>High</small><b style="color:#1a7f37"><?php echo (int) $count['high']; ?></b></div>
 				<div class="sws-om-stat"><small>Medium</small><b style="color:#9a5b13"><?php echo (int) $count['medium']; ?></b></div>
 				<div class="sws-om-stat"><small>Low</small><b style="color:#b32d2e"><?php echo (int) $count['low']; ?></b></div>
@@ -356,11 +362,11 @@ final class SWS_FOG_Orders {
 
 			<table class="wp-list-table widefat fixed striped">
 				<thead><tr>
-					<th>নাম</th><th style="width:130px">মোবাইল নম্বর</th><th>ঠিকানা</th><th style="width:100px">অর্ডার সংখ্যা</th><th style="width:150px">লাস্ট অর্ডার ডেট</th><th style="width:160px">কাস্টমার কোয়ালিটি</th>
+					<th>নাম</th><th style="width:130px">মোবাইল নম্বর</th><th>ঠিকানা</th><th style="width:100px">অর্ডার সংখ্যা</th><th style="width:80px">কমপ্লিট</th><th style="width:150px">লাস্ট অর্ডার ডেট</th><th style="width:160px">কাস্টমার কোয়ালিটি</th>
 				</tr></thead>
 				<tbody>
 				<?php if ( ! $rows ) : ?>
-					<tr><td colspan="6">এই সময়ের মধ্যে কোনো অর্ডার নেই।</td></tr>
+					<tr><td colspan="7">এই সময়ের মধ্যে কোনো অর্ডার নেই।</td></tr>
 				<?php endif; ?>
 				<?php
 				foreach ( $rows as $c ) :
@@ -378,6 +384,7 @@ final class SWS_FOG_Orders {
 						<td><?php echo esc_html( $c['phone'] ); ?><?php if ( SWS_Fake_Order_Guard::is_blocked( $c['phone'] ) ) : ?><br><small style="color:#b32d2e">ব্লকড</small><?php endif; ?></td>
 						<td><?php echo esc_html( $c['address'] ? $c['address'] : '—' ); ?></td>
 						<td><a href="<?php echo esc_url( $all ); ?>"><?php echo (int) $c['count']; ?></a></td>
+						<td><?php echo (int) $c['done']; ?><?php if ( $c['count'] ) : ?> <small>(<?php echo (int) round( $c['done'] * 100 / $c['count'] ); ?>%)</small><?php endif; ?></td>
 						<td><a href="<?php echo esc_url( $ord ); ?>"><?php echo esc_html( wp_date( 'j M Y', $c['last'] ) ); ?></a><br><small><?php echo esc_html( wp_date( 'g:i a', $c['last'] ) ); ?></small></td>
 						<td>
 							<div class="sws-dd">
