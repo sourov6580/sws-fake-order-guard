@@ -116,7 +116,7 @@ final class SWS_FOG_Orders {
 			if ( $to ) {
 				$where .= $wpdb->prepare( ' AND o.date_created_gmt < %s', $to );
 			}
-			$sql = "SELECT o.id, o.status AS st, o.date_created_gmt AS d, b.phone, b.first_name AS fn, b.last_name AS ln, b.address_1 AS a1, b.address_2 AS a2, b.city, b.state, b.email,
+			$sql = "SELECT o.id, o.status AS st, o.total_amount AS total, o.date_created_gmt AS d, b.phone, b.first_name AS fn, b.last_name AS ln, b.address_1 AS a1, b.address_2 AS a2, b.city, b.state, b.email,
 				s.phone AS sphone
 				FROM $o o
 				LEFT JOIN $a b ON b.order_id = o.id AND b.address_type = 'billing'
@@ -147,6 +147,7 @@ final class SWS_FOG_Orders {
 					$meta( '_billing_state', 'state' ),
 					$meta( '_shipping_phone', 'sphone' ),
 					$meta( '_billing_email', 'email' ),
+					$meta( '_order_total', 'total' ),
 				)
 			) . " FROM $p p WHERE $where";
 		}
@@ -171,12 +172,13 @@ final class SWS_FOG_Orders {
 			$key   = '' !== $ph ? $ph : ( is_email( $email ) ? 'e:' . $email : 'o:' . (int) $r->id );
 			$ts = (int) strtotime( $r->d . ' UTC' );
 			if ( ! isset( $out[ $key ] ) ) {
-				$out[ $key ] = array( 'key' => $key, 'phone' => $ph, 'email' => is_email( $email ) ? $email : '', 'count' => 0, 'done' => 0, 'last' => 0, 'order_id' => 0, 'name' => '', 'address' => '' );
+				$out[ $key ] = array( 'key' => $key, 'phone' => $ph, 'email' => is_email( $email ) ? $email : '', 'count' => 0, 'done' => 0, 'value' => 0.0, 'ids' => array(), 'products' => array(), 'last' => 0, 'order_id' => 0, 'name' => '', 'address' => '' );
 			}
 			$c = &$out[ $key ];
 			++$c['count'];
 			if ( 'wc-completed' === $r->st ) {
 				++$c['done'];
+				$c['value'] += (float) $r->total;
 			}
 			if ( $ts >= $c['last'] ) {
 				$name = trim( $r->fn . ' ' . $r->ln );
@@ -186,8 +188,10 @@ final class SWS_FOG_Orders {
 				$c['name']     = $name ? $name : $c['name'];
 				$c['address']  = $addr ? $addr : $c['address'];
 			}
+			$c['ids'][] = (int) $r->id;
 			unset( $c );
 		}
+		self::attach_products( $out );
 		if ( '' !== $search ) {
 			$out = array_filter(
 				$out,
@@ -220,6 +224,37 @@ final class SWS_FOG_Orders {
 			return $id ? 'o:' . $id : '';
 		}
 		return SWS_Fake_Order_Guard::normalize_phone( sanitize_text_field( $k ) );
+	}
+
+	/** Fill each customer's product list (unique names, in order) from the order line items. */
+	private static function attach_products( &$out ) {
+		global $wpdb;
+		$owner = array();
+		foreach ( $out as $k => $c ) {
+			foreach ( $c['ids'] as $id ) {
+				$owner[ $id ] = $k;
+			}
+		}
+		$t = $wpdb->prefix . 'woocommerce_order_items';
+		foreach ( array_chunk( array_keys( $owner ), 1000 ) as $chunk ) {
+			$items = $wpdb->get_results( "SELECT order_id, order_item_name AS n FROM $t WHERE order_item_type = 'line_item' AND order_id IN (" . implode( ',', array_map( 'intval', $chunk ) ) . ') ORDER BY order_item_id' ); // phpcs:ignore
+			foreach ( (array) $items as $it ) {
+				$n = trim( wp_strip_all_tags( (string) $it->n ) );
+				if ( '' !== $n ) {
+					$out[ $owner[ (int) $it->order_id ] ]['products'][ $n ] = true;
+				}
+			}
+		}
+		foreach ( $out as $k => $c ) {
+			$out[ $k ]['products'] = implode( ', ', array_keys( $c['products'] ) );
+			unset( $out[ $k ]['ids'] );
+		}
+	}
+
+	/** First few words, then "...". */
+	private static function short( $text, $words = 3 ) {
+		$w = preg_split( '/\s+/u', trim( (string) $text ) );
+		return count( $w ) > $words ? implode( ' ', array_slice( $w, 0, $words ) ) . '...' : (string) $text;
 	}
 
 	public static function quality_map() {
@@ -269,7 +304,7 @@ final class SWS_FOG_Orders {
 		header( 'Content-Disposition: attachment; filename="' . $file . '"' );
 		$fh = fopen( 'php://output', 'w' );
 		fwrite( $fh, "\xEF\xBB\xBF" ); // UTF-8 BOM so Excel shows Bangla correctly.
-		fputcsv( $fh, array( 'নাম', 'মোবাইল নম্বর', 'ঠিকানা', 'অর্ডার সংখ্যা', 'কমপ্লিট', 'লাস্ট অর্ডার ডেট', 'কাস্টমার কোয়ালিটি' ) );
+		fputcsv( $fh, array( 'নাম', 'মোবাইল নম্বর', 'ঠিকানা', 'অর্ডার সংখ্যা', 'কমপ্লিট', 'অর্ডার ভ্যালু', 'পন্য তালিকা', 'লাস্ট অর্ডার ডেট', 'কাস্টমার কোয়ালিটি' ) );
 		foreach ( $list as $c ) {
 			fputcsv(
 				$fh,
@@ -279,6 +314,8 @@ final class SWS_FOG_Orders {
 					self::csv_safe( $c['address'] ),
 					$c['count'],
 					$c['done'],
+					round( $c['value'], 2 ),
+					self::csv_safe( $c['products'] ),
 					wp_date( 'Y-m-d H:i', $c['last'] ),
 					isset( $qmap[ $c['key'] ], $qs[ $qmap[ $c['key'] ] ] ) ? $qs[ $qmap[ $c['key'] ] ] : '',
 				)
@@ -309,6 +346,7 @@ final class SWS_FOG_Orders {
 		$qs     = self::qualities();
 		$orders = array_sum( wp_list_pluck( $list, 'count' ) );
 		$done   = array_sum( wp_list_pluck( $list, 'done' ) );
+		$value  = array_sum( wp_list_pluck( $list, 'value' ) );
 		$base   = array(
 			'page'  => 'sws-fake-order-guard',
 			'tab'   => 'orders',
@@ -371,6 +409,7 @@ final class SWS_FOG_Orders {
 				<div class="sws-om-stat"><small>কাস্টমার</small><b><?php echo (int) $total; ?></b></div>
 				<div class="sws-om-stat"><small>মোট অর্ডার</small><b><?php echo (int) $orders; ?></b></div>
 				<div class="sws-om-stat"><small>কমপ্লিট</small><b><?php echo (int) $done; ?></b></div>
+				<div class="sws-om-stat"><small>কমপ্লিট অর্ডার ভ্যালু</small><b><?php echo wp_kses_post( wc_price( $value ) ); ?></b></div>
 				<div class="sws-om-stat"><small>High</small><b style="color:#1a7f37"><?php echo (int) $count['high']; ?></b></div>
 				<div class="sws-om-stat"><small>Medium</small><b style="color:#9a5b13"><?php echo (int) $count['medium']; ?></b></div>
 				<div class="sws-om-stat"><small>Low</small><b style="color:#b32d2e"><?php echo (int) $count['low']; ?></b></div>
@@ -378,11 +417,11 @@ final class SWS_FOG_Orders {
 
 			<table class="wp-list-table widefat fixed striped">
 				<thead><tr>
-					<th>নাম</th><th style="width:130px">মোবাইল নম্বর</th><th>ঠিকানা</th><th style="width:100px">অর্ডার সংখ্যা</th><th style="width:80px">কমপ্লিট</th><th style="width:150px">লাস্ট অর্ডার ডেট</th><th style="width:160px">কাস্টমার কোয়ালিটি</th>
+					<th>নাম</th><th style="width:130px">মোবাইল নম্বর</th><th>ঠিকানা</th><th style="width:100px">অর্ডার সংখ্যা</th><th style="width:80px">কমপ্লিট</th><th style="width:100px">অর্ডার ভ্যালু</th><th style="width:150px">পন্য তালিকা</th><th style="width:150px">লাস্ট অর্ডার ডেট</th><th style="width:160px">কাস্টমার কোয়ালিটি</th>
 				</tr></thead>
 				<tbody>
 				<?php if ( ! $rows ) : ?>
-					<tr><td colspan="7">এই সময়ের মধ্যে কোনো অর্ডার নেই।</td></tr>
+					<tr><td colspan="9">এই সময়ের মধ্যে কোনো অর্ডার নেই।</td></tr>
 				<?php endif; ?>
 				<?php
 				foreach ( $rows as $c ) :
@@ -402,6 +441,8 @@ final class SWS_FOG_Orders {
 						<td><?php echo esc_html( $c['address'] ? $c['address'] : '—' ); ?></td>
 						<td><a href="<?php echo esc_url( $all ); ?>"><?php echo (int) $c['count']; ?></a></td>
 						<td><?php echo (int) $c['done']; ?><?php if ( $c['count'] ) : ?> <small>(<?php echo (int) round( $c['done'] * 100 / $c['count'] ); ?>%)</small><?php endif; ?></td>
+						<td><?php echo $c['value'] > 0 ? wp_kses_post( wc_price( $c['value'] ) ) : '—'; ?></td>
+						<td title="<?php echo esc_attr( $c['products'] ); ?>"><?php echo esc_html( '' !== $c['products'] ? self::short( $c['products'] ) : '—' ); ?></td>
 						<td><a href="<?php echo esc_url( $ord ); ?>"><?php echo esc_html( wp_date( 'j M Y', $c['last'] ) ); ?></a><br><small><?php echo esc_html( wp_date( 'g:i a', $c['last'] ) ); ?></small></td>
 						<td>
 							<div class="sws-dd">
