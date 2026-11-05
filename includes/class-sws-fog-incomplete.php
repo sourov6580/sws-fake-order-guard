@@ -237,7 +237,9 @@ final class SWS_FOG_Incomplete {
 
 	public function ajax_capture() {
 		global $wpdb;
-		if ( ! check_ajax_referer( 'sws_fog_capture', 'nonce', false ) ) {
+		// Guest nonces are shared and go stale on cached landing/checkout pages (LiteSpeed etc.),
+		// so for guests we rely on the rate limit + phone validation instead.
+		if ( is_user_logged_in() && ! check_ajax_referer( 'sws_fog_capture', 'nonce', false ) ) {
 			wp_send_json_error( null, 403 );
 		}
 		$ip = self::ip();
