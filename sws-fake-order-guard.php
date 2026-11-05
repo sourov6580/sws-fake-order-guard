@@ -2,8 +2,8 @@
 /**
  * Plugin Name:       SWS Fake Order Guard
  * Plugin URI:        https://sabbirwebsolutions.com
- * Description:       WooCommerce ফেক অর্ডার প্রতিরোধ: মোবাইল নম্বর যাচাই, একই নম্বর/IP থেকে নির্দিষ্ট সময়ে অর্ডারের লিমিট, ফোন নম্বর ব্লকলিস্ট,, টেস্ট/এলোমেলো লেখা দিয়ে অর্ডার ব্লক, এবং শুধু যাচাই করা অর্ডারে Facebook Purchase ইভেন্ট (Conversions API)।
- * Version:           1.4.0
+ * Description:       WooCommerce ফেক অর্ডার প্রতিরোধ: মোবাইল নম্বর যাচাই, একই নম্বর/IP থেকে নির্দিষ্ট সময়ে অর্ডারের লিমিট, ফোন নম্বর ব্লকলিস্ট, টেস্ট/এলোমেলো লেখা দিয়ে অর্ডার ব্লক, শুধু যাচাই করা অর্ডারে Facebook Purchase ইভেন্ট (Conversions API), এবং অসম্পূর্ণ অর্ডার (Incomplete Orders) সেভ করে কল/WhatsApp দিয়ে উদ্ধার।
+ * Version:           1.4.1
  * Author:            Sabbir Web Solutions
  * Author URI:        https://sabbirwebsolutions.com
  * Requires at least: 6.0
@@ -17,10 +17,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+define( 'SWS_FOG_FILE', __FILE__ );
+require_once __DIR__ . '/includes/class-sws-fog-incomplete.php';
+
 final class SWS_Fake_Order_Guard {
 
 	const OPT     = 'sws_fog_settings';
-	const VERSION = '1.4.0';
+	const VERSION = '1.4.1';
 	const CAPI_VER = 'v22.0';
 	const BL      = 'sws_fog_blocklist';
 	const PER_PAGE = 50;
@@ -1106,6 +1109,7 @@ final class SWS_Fake_Order_Guard {
 }
 
 add_action( 'plugins_loaded', array( 'SWS_Fake_Order_Guard', 'instance' ) );
+add_action( 'plugins_loaded', array( 'SWS_FOG_Incomplete', 'instance' ) );
 
 /*
  * Auto update from GitHub releases.
@@ -1135,4 +1139,7 @@ register_activation_hook( __FILE__, function () {
 	if ( false === get_option( SWS_Fake_Order_Guard::BL, false ) ) {
 		add_option( SWS_Fake_Order_Guard::BL, array(), '', 'no' );
 	}
+	SWS_FOG_Incomplete::install();
 } );
+
+register_deactivation_hook( __FILE__, array( 'SWS_FOG_Incomplete', 'deactivate' ) );
