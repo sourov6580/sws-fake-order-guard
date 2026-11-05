@@ -3,7 +3,7 @@
  * Plugin Name:       SWS Fake Order Guard
  * Plugin URI:        https://sabbirwebsolutions.com
  * Description:       WooCommerce ফেক অর্ডার প্রতিরোধ: মোবাইল নম্বর যাচাই, একই নম্বর/IP থেকে নির্দিষ্ট সময়ে অর্ডারের লিমিট, ফোন নম্বর ব্লকলিস্ট, টেস্ট/এলোমেলো লেখা দিয়ে অর্ডার ব্লক, শুধু যাচাই করা অর্ডারে Facebook Purchase ইভেন্ট (Conversions API), এবং অসম্পূর্ণ অর্ডার (Incomplete Orders) সেভ করে কল/WhatsApp দিয়ে উদ্ধার।
- * Version:           1.4.1
+ * Version:           1.4.2
  * Author:            Sabbir Web Solutions
  * Author URI:        https://sabbirwebsolutions.com
  * Requires at least: 6.0
@@ -23,7 +23,7 @@ require_once __DIR__ . '/includes/class-sws-fog-incomplete.php';
 final class SWS_Fake_Order_Guard {
 
 	const OPT     = 'sws_fog_settings';
-	const VERSION = '1.4.1';
+	const VERSION = '1.4.2';
 	const CAPI_VER = 'v22.0';
 	const BL      = 'sws_fog_blocklist';
 	const PER_PAGE = 50;
@@ -166,6 +166,17 @@ final class SWS_Fake_Order_Guard {
 			$v         = sanitize_textarea_field( $in[ $k ] ?? '' );
 			$out[ $k ] = '' === trim( $v ) ? $d[ $k ] : $v;
 		}
+		// Settings page has two forms (main / CAPI); keep the other form's saved values.
+		$section = $in['_section'] ?? '';
+		if ( 'main' === $section || 'capi' === $section ) {
+			$old = wp_parse_args( (array) get_option( self::OPT, array() ), $d );
+			foreach ( array_keys( $out ) as $k ) {
+				$is_capi = 0 === strpos( $k, 'capi_' );
+				if ( ( 'main' === $section ) === $is_capi ) {
+					$out[ $k ] = $old[ $k ];
+				}
+			}
+		}
 		return $out;
 	}
 
@@ -196,7 +207,15 @@ final class SWS_Fake_Order_Guard {
 					<tr><th scope="row"><label for="fog-m4">ব্লকড নম্বরের মেসেজ</label></th><td><textarea id="fog-m4" rows="2" class="large-text" name="<?php echo esc_attr( $n ); ?>[msg_block]"><?php echo esc_textarea( $o['msg_block'] ); ?></textarea></td></tr>
 					<tr><th scope="row"><label for="fog-m5">টেস্ট/এলোমেলো লেখার মেসেজ</label></th><td><textarea id="fog-m5" rows="2" class="large-text" name="<?php echo esc_attr( $n ); ?>[msg_junk]"><?php echo esc_textarea( $o['msg_junk'] ); ?></textarea><p class="description">যেকোনো মেসেজে <code>{contact}</code> = যোগাযোগের নম্বর, <code>{wait}</code> = বাকি সময় (যেমন "৩ ঘণ্টা ২০ মিনিট")।</p></td></tr>
 				</table>
-				<h2 style="margin-top:30px">যাচাই করা অর্ডারে Facebook Purchase (Conversions API)</h2>
+				<input type="hidden" name="<?php echo esc_attr( $n ); ?>[_section]" value="main">
+				<?php submit_button( 'সেভ করুন' ); ?>
+			</form>
+			<?php $this->render_blocklist(); ?>
+			<hr style="margin:30px 0 20px">
+			<form method="post" action="options.php">
+				<?php settings_fields( 'sws_fog_group' ); ?>
+				<input type="hidden" name="<?php echo esc_attr( $n ); ?>[_section]" value="capi">
+				<h2>যাচাই করা অর্ডারে Facebook Purchase (Conversions API)</h2>
 				<p style="max-width:820px">ক্যাশ অন ডেলিভারি বা ম্যানুয়াল বিকাশ/নগদে অর্ডার হলেই Purchase ইভেন্ট গেলে ফেক অর্ডারও Facebook-এ "সেল" হিসেবে গোনা হয়, আর অ্যাড ভুল অডিয়েন্স শেখে। এটা চালু করলে Purchase ইভেন্ট যাবে শুধু তখন, যখন আপনি অর্ডার যাচাই করে নিচের স্ট্যাটাসে নেবেন। ইভেন্ট সার্ভার থেকে সরাসরি Meta-তে যায়, তাই অ্যাড ব্লকারেও আটকায় না।</p>
 				<table class="form-table" role="presentation">
 					<tr><th scope="row">চালু করুন</th><td><label><input type="checkbox" name="<?php echo esc_attr( $n ); ?>[capi_enabled]" value="1" <?php checked( $o['capi_enabled'], 1 ); ?>> যাচাই করা অর্ডারে Purchase ইভেন্ট পাঠান</label></td></tr>
@@ -212,7 +231,6 @@ final class SWS_Fake_Order_Guard {
 				</table>
 				<?php submit_button( 'সেভ করুন' ); ?>
 			</form>
-			<?php $this->render_blocklist(); ?>
 			<p style="color:#787c82">Developed by <a href="https://sabbirwebsolutions.com" target="_blank" rel="noopener">Sabbir Web Solutions</a></p>
 		</div>
 		<?php
