@@ -116,7 +116,7 @@ final class SWS_FOG_Orders {
 			if ( $to ) {
 				$where .= $wpdb->prepare( ' AND o.date_created_gmt < %s', $to );
 			}
-			$sql = "SELECT o.id, o.status AS st, o.date_created_gmt AS d, b.phone, b.first_name AS fn, b.last_name AS ln, b.address_1 AS a1, b.address_2 AS a2, b.city, b.state,
+			$sql = "SELECT o.id, o.status AS st, o.date_created_gmt AS d, b.phone, b.first_name AS fn, b.last_name AS ln, b.address_1 AS a1, b.address_2 AS a2, b.city, b.state, b.email,
 				s.phone AS sphone
 				FROM $o o
 				LEFT JOIN $a b ON b.order_id = o.id AND b.address_type = 'billing'
@@ -146,6 +146,7 @@ final class SWS_FOG_Orders {
 					$meta( '_billing_city', 'city' ),
 					$meta( '_billing_state', 'state' ),
 					$meta( '_shipping_phone', 'sphone' ),
+					$meta( '_billing_email', 'email' ),
 				)
 			) . " FROM $p p WHERE $where";
 		}
@@ -164,15 +165,15 @@ final class SWS_FOG_Orders {
 	public static function customers( $range, $search = '' ) {
 		$out = array();
 		foreach ( self::rows( $range ) as $r ) {
-			$ph = SWS_Fake_Order_Guard::normalize_phone( $r->phone ? $r->phone : $r->sphone );
-			if ( '' === $ph ) {
-				continue;
-			}
+			// Group by mobile number; orders without a number fall back to email, then to the order itself.
+			$ph    = SWS_Fake_Order_Guard::normalize_phone( $r->phone ? $r->phone : $r->sphone );
+			$email = strtolower( trim( (string) $r->email ) );
+			$key   = '' !== $ph ? $ph : ( is_email( $email ) ? 'e:' . $email : 'o:' . (int) $r->id );
 			$ts = (int) strtotime( $r->d . ' UTC' );
-			if ( ! isset( $out[ $ph ] ) ) {
-				$out[ $ph ] = array( 'phone' => $ph, 'count' => 0, 'done' => 0, 'last' => 0, 'order_id' => 0, 'name' => '', 'address' => '' );
+			if ( ! isset( $out[ $key ] ) ) {
+				$out[ $key ] = array( 'key' => $key, 'phone' => $ph, 'email' => is_email( $email ) ? $email : '', 'count' => 0, 'done' => 0, 'last' => 0, 'order_id' => 0, 'name' => '', 'address' => '' );
 			}
-			$c = &$out[ $ph ];
+			$c = &$out[ $key ];
 			++$c['count'];
 			if ( 'wc-completed' === $r->st ) {
 				++$c['done'];
@@ -191,7 +192,8 @@ final class SWS_FOG_Orders {
 			$out = array_filter(
 				$out,
 				function ( $c ) use ( $search ) {
-					return false !== strpos( $c['phone'], $search )
+					return ( '' !== $c['phone'] && false !== strpos( $c['phone'], $search ) )
+						|| false !== mb_stripos( $c['email'], $search )
 						|| false !== mb_stripos( $c['name'], $search )
 						|| false !== mb_stripos( $c['address'], $search );
 				}
@@ -206,6 +208,20 @@ final class SWS_FOG_Orders {
 		return $out;
 	}
 
+	/** Customer key: 01XXXXXXXXX, e:email or o:order_id. */
+	private static function clean_key( $k ) {
+		$k = trim( (string) $k );
+		if ( 0 === strpos( $k, 'e:' ) ) {
+			$e = sanitize_email( substr( $k, 2 ) );
+			return is_email( $e ) ? 'e:' . strtolower( $e ) : '';
+		}
+		if ( 0 === strpos( $k, 'o:' ) ) {
+			$id = absint( substr( $k, 2 ) );
+			return $id ? 'o:' . $id : '';
+		}
+		return SWS_Fake_Order_Guard::normalize_phone( sanitize_text_field( $k ) );
+	}
+
 	public static function quality_map() {
 		$q = get_option( self::QOPT, array() );
 		return is_array( $q ) ? $q : array();
@@ -217,7 +233,7 @@ final class SWS_FOG_Orders {
 		if ( ! current_user_can( 'manage_woocommerce' ) || ! check_ajax_referer( 'sws_fog_quality', 'nonce', false ) ) {
 			wp_send_json_error( null, 403 );
 		}
-		$ph = SWS_Fake_Order_Guard::normalize_phone( sanitize_text_field( wp_unslash( $_POST['phone'] ?? '' ) ) );
+		$ph = self::clean_key( wp_unslash( $_POST['key'] ?? ( $_POST['phone'] ?? '' ) ) ); // phpcs:ignore
 		$q  = sanitize_key( $_POST['q'] ?? '' );
 		if ( '' === $ph || ( '' !== $q && ! isset( self::qualities()[ $q ] ) ) ) {
 			wp_send_json_error( null, 400 );
@@ -259,12 +275,12 @@ final class SWS_FOG_Orders {
 				$fh,
 				array(
 					self::csv_safe( $c['name'] ),
-					'="' . $c['phone'] . '"', // keep the leading 0 in Excel.
+					'' !== $c['phone'] ? '="' . $c['phone'] . '"' : '', // keep the leading 0 in Excel.
 					self::csv_safe( $c['address'] ),
 					$c['count'],
 					$c['done'],
 					wp_date( 'Y-m-d H:i', $c['last'] ),
-					isset( $qmap[ $c['phone'] ], $qs[ $qmap[ $c['phone'] ] ] ) ? $qs[ $qmap[ $c['phone'] ] ] : '',
+					isset( $qmap[ $c['key'] ], $qs[ $qmap[ $c['key'] ] ] ) ? $qs[ $qmap[ $c['key'] ] ] : '',
 				)
 			);
 		}
@@ -304,8 +320,8 @@ final class SWS_FOG_Orders {
 		$export = wp_nonce_url( add_query_arg( array_merge( $base, array( 'action' => 'sws_fog_orders_export' ) ), admin_url( 'admin-post.php' ) ), 'sws_fog_orders_export' );
 		$count  = array( 'high' => 0, 'medium' => 0, 'low' => 0 );
 		foreach ( $list as $c ) {
-			if ( isset( $qmap[ $c['phone'] ], $count[ $qmap[ $c['phone'] ] ] ) ) {
-				++$count[ $qmap[ $c['phone'] ] ];
+			if ( isset( $qmap[ $c['key'] ], $count[ $qmap[ $c['key'] ] ] ) ) {
+				++$count[ $qmap[ $c['key'] ] ];
 			}
 		}
 		?>
@@ -370,25 +386,26 @@ final class SWS_FOG_Orders {
 				<?php endif; ?>
 				<?php
 				foreach ( $rows as $c ) :
-					$q   = isset( $qmap[ $c['phone'] ], $qs[ $qmap[ $c['phone'] ] ] ) ? $qmap[ $c['phone'] ] : '';
+					$q   = isset( $qmap[ $c['key'] ], $qs[ $qmap[ $c['key'] ] ] ) ? $qmap[ $c['key'] ] : '';
 					$ord = admin_url( 'post.php?post=' . (int) $c['order_id'] . '&action=edit' );
 					if ( self::hpos() ) {
 						$ord = admin_url( 'admin.php?page=wc-orders&action=edit&id=' . (int) $c['order_id'] );
 					}
-					$all = self::hpos()
-						? admin_url( 'admin.php?page=wc-orders&s=' . rawurlencode( $c['phone'] ) )
-						: admin_url( 'edit.php?post_type=shop_order&s=' . rawurlencode( $c['phone'] ) );
+					$find = '' !== $c['phone'] ? $c['phone'] : $c['email'];
+					$all  = '' === $find ? $ord : ( self::hpos()
+						? admin_url( 'admin.php?page=wc-orders&s=' . rawurlencode( $find ) )
+						: admin_url( 'edit.php?post_type=shop_order&s=' . rawurlencode( $find ) ) );
 					?>
 					<tr>
 						<td><b><?php echo esc_html( $c['name'] ? $c['name'] : '—' ); ?></b></td>
-						<td><?php echo esc_html( $c['phone'] ); ?><?php if ( SWS_Fake_Order_Guard::is_blocked( $c['phone'] ) ) : ?><br><small style="color:#b32d2e">ব্লকড</small><?php endif; ?></td>
+						<td><?php if ( '' !== $c['phone'] ) : ?><?php echo esc_html( $c['phone'] ); ?><?php else : ?><span style="color:#787c82">নম্বর নেই</span><?php if ( $c['email'] ) : ?><br><small><?php echo esc_html( $c['email'] ); ?></small><?php endif; ?><?php endif; ?><?php if ( '' !== $c['phone'] && SWS_Fake_Order_Guard::is_blocked( $c['phone'] ) ) : ?><br><small style="color:#b32d2e">ব্লকড</small><?php endif; ?></td>
 						<td><?php echo esc_html( $c['address'] ? $c['address'] : '—' ); ?></td>
 						<td><a href="<?php echo esc_url( $all ); ?>"><?php echo (int) $c['count']; ?></a></td>
 						<td><?php echo (int) $c['done']; ?><?php if ( $c['count'] ) : ?> <small>(<?php echo (int) round( $c['done'] * 100 / $c['count'] ); ?>%)</small><?php endif; ?></td>
 						<td><a href="<?php echo esc_url( $ord ); ?>"><?php echo esc_html( wp_date( 'j M Y', $c['last'] ) ); ?></a><br><small><?php echo esc_html( wp_date( 'g:i a', $c['last'] ) ); ?></small></td>
 						<td>
 							<div class="sws-dd">
-								<div class="sws-q<?php echo $q ? ' q-' . esc_attr( $q ) : ''; ?>" data-phone="<?php echo esc_attr( $c['phone'] ); ?>">
+								<div class="sws-q<?php echo $q ? ' q-' . esc_attr( $q ) : ''; ?>" data-key="<?php echo esc_attr( $c['key'] ); ?>">
 									<button type="button" class="sws-dd-btn sws-q-label"><?php echo esc_html( $q ? $qs[ $q ] : 'সেট করুন' ); ?></button>
 									<button type="button" class="sws-dd-btn sws-q-arrow" aria-label="কোয়ালিটি বাছাই">▾</button>
 								</div>
@@ -418,7 +435,7 @@ final class SWS_FOG_Orders {
 					?>
 				</div></div>
 			<?php endif; ?>
-			<p class="description" style="margin-top:12px">একই মোবাইল নম্বরের সব অর্ডার একজন কাস্টমার হিসেবে গোনা হয়। নাম ও ঠিকানা নেওয়া হয় সর্বশেষ অর্ডার থেকে। ট্র্যাশ ও ড্রাফট অর্ডার বাদ।</p>
+			<p class="description" style="margin-top:12px">একই মোবাইল নম্বরের সব অর্ডার একজন কাস্টমার হিসেবে গোনা হয়। নম্বর না থাকলে ইমেইল দিয়ে, তাও না থাকলে অর্ডারটা আলাদা কাস্টমার হিসেবে দেখায়। নাম ও ঠিকানা নেওয়া হয় সর্বশেষ অর্ডার থেকে। ট্র্যাশ ও ড্রাফট অর্ডার বাদ।</p>
 		</div>
 		<script>
 		(function(){
@@ -432,7 +449,7 @@ final class SWS_FOG_Orders {
 				if (opt) {
 					e.preventDefault();
 					var dd = opt.closest('.sws-dd'), box = dd.querySelector('.sws-q'), q = opt.dataset.q;
-					var f = new FormData(); f.append('action','sws_fog_quality'); f.append('nonce',nonce); f.append('phone',box.dataset.phone); f.append('q',q);
+					var f = new FormData(); f.append('action','sws_fog_quality'); f.append('nonce',nonce); f.append('key',box.dataset.key); f.append('q',q);
 					fetch(ajax,{method:'POST',body:f,credentials:'same-origin'}).then(function(r){ return r.json(); }).then(function(r){
 						if (!r || !r.success) { alert('সেভ করা যায়নি, আবার চেষ্টা করুন।'); return; }
 						box.className = 'sws-q' + (q ? ' q-' + q : '');
