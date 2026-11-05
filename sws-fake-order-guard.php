@@ -19,6 +19,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 define( 'SWS_FOG_FILE', __FILE__ );
 require_once __DIR__ . '/includes/class-sws-fog-incomplete.php';
+require_once __DIR__ . '/includes/class-sws-fog-orders.php';
 
 final class SWS_Fake_Order_Guard {
 
@@ -193,6 +194,7 @@ final class SWS_Fake_Order_Guard {
 			'blocklist'  => 'ফোন নম্বর ব্লক',
 			'capi'       => 'Facebook Conversions API',
 			'incomplete' => 'Incomplete Orders',
+			'orders'     => 'Order Management',
 		);
 		$tab  = sanitize_key( $_GET['tab'] ?? 'general' ); // phpcs:ignore
 		$tab  = isset( $tabs[ $tab ] ) ? $tab : 'general';
@@ -252,6 +254,8 @@ final class SWS_Fake_Order_Guard {
 			</form>
 			<?php elseif ( 'incomplete' === $tab && class_exists( 'SWS_FOG_Incomplete' ) ) : ?>
 				<?php SWS_FOG_Incomplete::instance()->render_page(); ?>
+			<?php elseif ( 'orders' === $tab && class_exists( 'SWS_FOG_Orders' ) ) : ?>
+				<?php SWS_FOG_Orders::instance()->render_page(); ?>
 			<?php endif; ?>
 			<p style="color:#787c82;margin-top:30px">Developed by <a href="https://sabbirwebsolutions.com" target="_blank" rel="noopener">Sabbir Web Solutions</a></p>
 		</div>
@@ -1150,6 +1154,7 @@ final class SWS_Fake_Order_Guard {
 
 add_action( 'plugins_loaded', array( 'SWS_Fake_Order_Guard', 'instance' ) );
 add_action( 'plugins_loaded', array( 'SWS_FOG_Incomplete', 'instance' ) );
+add_action( 'plugins_loaded', array( 'SWS_FOG_Orders', 'instance' ) );
 
 /*
  * Auto update from GitHub releases.
