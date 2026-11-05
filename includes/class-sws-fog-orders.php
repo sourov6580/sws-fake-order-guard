@@ -179,6 +179,7 @@ final class SWS_FOG_Orders {
 			if ( 'wc-completed' === $r->st ) {
 				++$c['done'];
 				$c['value'] += (float) $r->total;
+				$c['ids'][]   = (int) $r->id; // product list: completed orders only.
 			}
 			if ( $ts >= $c['last'] ) {
 				$name = trim( $r->fn . ' ' . $r->ln );
@@ -188,7 +189,6 @@ final class SWS_FOG_Orders {
 				$c['name']     = $name ? $name : $c['name'];
 				$c['address']  = $addr ? $addr : $c['address'];
 			}
-			$c['ids'][] = (int) $r->id;
 			unset( $c );
 		}
 		self::attach_products( $out );
