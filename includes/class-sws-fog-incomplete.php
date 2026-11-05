@@ -16,7 +16,7 @@ final class SWS_FOG_Incomplete {
 	const DB_OPT   = 'sws_fog_ic_db';
 	const DB_VER   = '1';
 	const CRON     = 'sws_fog_ic_cleanup';
-	const SLUG     = 'sws-fog-incomplete';
+	const SLUG     = 'sws-fake-order-guard';
 	const COOKIE   = 'sws_fog_ic';
 	const PER_PAGE = 30;
 
@@ -39,7 +39,7 @@ final class SWS_FOG_Incomplete {
 		add_action( self::CRON, array( $this, 'cleanup' ) );
 
 		add_action( 'admin_init', array( $this, 'register_settings' ) );
-		add_action( 'admin_menu', array( $this, 'admin_menu' ), 100 );
+		add_action( 'admin_init', array( $this, 'old_page_redirect' ) );
 		add_action( 'admin_post_sws_fog_ic', array( $this, 'handle_action' ) );
 		add_action( 'admin_post_sws_fog_ic_bulk', array( $this, 'handle_bulk' ) );
 		add_action( 'wp_ajax_sws_fog_ic_called', array( $this, 'ajax_called' ) );
@@ -358,22 +358,26 @@ final class SWS_FOG_Incomplete {
 	}
 
 	private static function page_url( $args = array() ) {
-		return add_query_arg( array_merge( array( 'page' => self::SLUG ), $args ), admin_url( 'admin.php' ) );
+		return add_query_arg( array_merge( array( 'page' => self::SLUG, 'tab' => 'incomplete' ), $args ), admin_url( 'admin.php' ) );
 	}
 
-	private static function open_count() {
+	public static function open_count() {
 		global $wpdb;
 		$t = self::table();
 		return (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM $t WHERE status = 'new' AND updated_at < %s", self::gmt( - (int) self::get( 'minutes' ) * MINUTE_IN_SECONDS ) ) ); // phpcs:ignore
 	}
 
-	public function admin_menu() {
-		if ( ! class_exists( 'WooCommerce' ) ) {
-			return;
+	/** Count of incomplete rows waiting for a call (for the menu badge). */
+	public static function menu_count() {
+		return self::DB_VER === get_option( self::DB_OPT ) ? self::open_count() : 0;
+	}
+
+	/** Old v1.4.1-1.4.2 standalone page now lives in a tab of the main page. */
+	public function old_page_redirect() {
+		if ( isset( $_GET['page'] ) && 'sws-fog-incomplete' === $_GET['page'] ) { // phpcs:ignore
+			wp_safe_redirect( self::page_url() );
+			exit;
 		}
-		$n     = self::DB_VER === get_option( self::DB_OPT ) ? self::open_count() : 0;
-		$label = 'Incomplete Orders' . ( $n ? ' <span class="awaiting-mod">' . (int) $n . '</span>' : '' );
-		add_submenu_page( 'woocommerce', 'Incomplete Orders', $label, 'manage_woocommerce', self::SLUG, array( $this, 'render_page' ) );
 	}
 
 	private static function action_url( $do, $id ) {
@@ -506,7 +510,7 @@ final class SWS_FOG_Incomplete {
 		$t       = self::table();
 		$wait    = self::gmt( - (int) self::get( 'minutes' ) * MINUTE_IN_SECONDS );
 		$tabs    = self::statuses();
-		$tab     = sanitize_key( $_GET['tab'] ?? 'incomplete' ); // phpcs:ignore
+		$tab     = sanitize_key( $_GET['view'] ?? 'incomplete' ); // phpcs:ignore
 		$tab     = isset( $tabs[ $tab ] ) ? $tab : 'incomplete';
 		$s       = SWS_Fake_Order_Guard::normalize_phone( sanitize_text_field( wp_unslash( $_GET['s'] ?? '' ) ) ); // phpcs:ignore
 		$paged   = max( 1, (int) ( $_GET['paged'] ?? 1 ) ); // phpcs:ignore
@@ -549,7 +553,7 @@ final class SWS_FOG_Incomplete {
 			'blocked'   => 'ব্লকড',
 		);
 		?>
-		<div class="wrap sws-ic">
+		<div class="sws-ic">
 			<style>
 				.sws-ic .sws-ic-stats{display:flex;gap:12px;flex-wrap:wrap;margin:14px 0}
 				.sws-ic .sws-ic-stat{background:#fff;border:1px solid #dcdcde;border-radius:6px;padding:10px 16px;min-width:130px}
@@ -563,7 +567,6 @@ final class SWS_FOG_Incomplete {
 				.sws-ic .row-actions{position:static;left:auto}
 				.sws-ic small{color:#646970}
 			</style>
-			<h1 class="wp-heading-inline">Incomplete Orders</h1>
 			<p>চেকআউটে মোবাইল নম্বর দিয়ে অর্ডার শেষ না করা গ্রাহকদের তালিকা। <?php echo (int) self::get( 'minutes' ); ?> মিনিট পার হলে তবেই তালিকায় আসে। ভুয়া প্যাটার্নের নম্বর সেভ হয় না।</p>
 			<?php if ( isset( $msgs[ $msg ] ) ) : ?>
 				<div class="notice notice-success is-dismissible"><p><?php echo esc_html( $msgs[ $msg ] ); ?></p></div>
@@ -582,14 +585,15 @@ final class SWS_FOG_Incomplete {
 				<?php
 				$links = array();
 				foreach ( $tabs as $k => $l ) {
-					$links[] = '<li><a href="' . esc_url( self::page_url( array( 'tab' => $k ) ) ) . '"' . ( $k === $tab ? ' class="current"' : '' ) . '>' . esc_html( $l ) . ' <span class="count">(' . (int) $counts[ $k ] . ')</span></a>';
+					$links[] = '<li><a href="' . esc_url( self::page_url( array( 'view' => $k ) ) ) . '"' . ( $k === $tab ? ' class="current"' : '' ) . '>' . esc_html( $l ) . ' <span class="count">(' . (int) $counts[ $k ] . ')</span></a>';
 				}
 				echo implode( ' | </li>', $links ) . '</li>'; // phpcs:ignore
 				?>
 			</ul>
 			<form method="get" style="float:right;margin:8px 0">
 				<input type="hidden" name="page" value="<?php echo esc_attr( self::SLUG ); ?>">
-				<input type="hidden" name="tab" value="<?php echo esc_attr( $tab ); ?>">
+				<input type="hidden" name="tab" value="incomplete">
+				<input type="hidden" name="view" value="<?php echo esc_attr( $tab ); ?>">
 				<input type="search" name="s" value="<?php echo esc_attr( $s ); ?>" placeholder="ফোন নম্বর">
 				<button class="button">খুঁজুন</button>
 			</form>
@@ -710,7 +714,6 @@ final class SWS_FOG_Incomplete {
 				</table>
 				<?php submit_button( 'সেভ করুন' ); ?>
 			</form>
-			<p style="color:#787c82">Developed by <a href="https://sabbirwebsolutions.com" target="_blank" rel="noopener">Sabbir Web Solutions</a></p>
 		</div>
 		<script>
 		(function(){

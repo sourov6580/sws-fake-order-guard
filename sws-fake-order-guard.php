@@ -3,7 +3,7 @@
  * Plugin Name:       SWS Fake Order Guard
  * Plugin URI:        https://sabbirwebsolutions.com
  * Description:       WooCommerce ফেক অর্ডার প্রতিরোধ: মোবাইল নম্বর যাচাই, একই নম্বর/IP থেকে নির্দিষ্ট সময়ে অর্ডারের লিমিট, ফোন নম্বর ব্লকলিস্ট, টেস্ট/এলোমেলো লেখা দিয়ে অর্ডার ব্লক, শুধু যাচাই করা অর্ডারে Facebook Purchase ইভেন্ট (Conversions API), এবং অসম্পূর্ণ অর্ডার (Incomplete Orders) সেভ করে কল/WhatsApp দিয়ে উদ্ধার।
- * Version:           1.4.2
+ * Version:           1.4.3
  * Author:            Sabbir Web Solutions
  * Author URI:        https://sabbirwebsolutions.com
  * Requires at least: 6.0
@@ -23,7 +23,7 @@ require_once __DIR__ . '/includes/class-sws-fog-incomplete.php';
 final class SWS_Fake_Order_Guard {
 
 	const OPT     = 'sws_fog_settings';
-	const VERSION = '1.4.2';
+	const VERSION = '1.4.3';
 	const CAPI_VER = 'v22.0';
 	const BL      = 'sws_fog_blocklist';
 	const PER_PAGE = 50;
@@ -132,7 +132,9 @@ final class SWS_Fake_Order_Guard {
 
 	public function admin_menu() {
 		$parent = class_exists( 'WooCommerce' ) ? 'woocommerce' : 'options-general.php';
-		add_submenu_page( $parent, 'Fake Order Guard', 'Fake Order Guard', 'manage_woocommerce', 'sws-fake-order-guard', array( $this, 'render_page' ) );
+		$n     = class_exists( 'SWS_FOG_Incomplete' ) ? SWS_FOG_Incomplete::menu_count() : 0;
+		$label = 'Fake Order Guard' . ( $n ? ' <span class="awaiting-mod">' . (int) $n . '</span>' : '' );
+		add_submenu_page( $parent, 'Fake Order Guard', $label, 'manage_woocommerce', 'sws-fake-order-guard', array( $this, 'render_page' ) );
 	}
 
 	public function register_settings() {
@@ -184,11 +186,27 @@ final class SWS_Fake_Order_Guard {
 		if ( ! current_user_can( 'manage_woocommerce' ) ) {
 			return;
 		}
-		$o = wp_parse_args( (array) get_option( self::OPT, array() ), self::defaults() );
-		$n = self::OPT;
+		$o    = wp_parse_args( (array) get_option( self::OPT, array() ), self::defaults() );
+		$n    = self::OPT;
+		$tabs = array(
+			'general'    => 'General',
+			'blocklist'  => 'ফোন নম্বর ব্লক',
+			'capi'       => 'Facebook Conversions API',
+			'incomplete' => 'Incomplete Orders',
+		);
+		$tab  = sanitize_key( $_GET['tab'] ?? 'general' ); // phpcs:ignore
+		$tab  = isset( $tabs[ $tab ] ) ? $tab : 'general';
+		$icn  = class_exists( 'SWS_FOG_Incomplete' ) ? SWS_FOG_Incomplete::menu_count() : 0;
 		?>
-		<div class="wrap">
+		<div class="wrap sws-fog-wrap">
 			<h1>SWS Fake Order Guard</h1>
+			<?php settings_errors(); ?>
+			<nav class="nav-tab-wrapper" style="margin-bottom:16px">
+				<?php foreach ( $tabs as $k => $l ) : ?>
+					<a href="<?php echo esc_url( self::page_url( 'general' === $k ? array() : array( 'tab' => $k ) ) ); ?>" class="nav-tab<?php echo $k === $tab ? ' nav-tab-active' : ''; ?>"><?php echo esc_html( $l ); ?><?php if ( 'incomplete' === $k && $icn ) : ?> <span class="awaiting-mod count-<?php echo (int) $icn; ?>" style="display:inline-block;vertical-align:top;box-sizing:border-box;margin:1px 0 -1px 4px;padding:0 5px;min-width:18px;height:18px;border-radius:9px;background:#d63638;color:#fff;font-size:11px;line-height:1.6;text-align:center"><?php echo (int) $icn; ?></span><?php endif; ?></a>
+				<?php endforeach; ?>
+			</nav>
+			<?php if ( 'general' === $tab ) : ?>
 			<p>মোবাইল নম্বর যাচাই এবং একই নম্বর/IP থেকে বারবার অর্ডার ঠেকানোর সেটিংস। কোনো অর্ডার <b>ডিলিট / ট্র্যাশ / Completed</b> করলে সেই নম্বর ও IP-এর লিমিট সাথে সাথে খুলে যায়।</p>
 			<form method="post" action="options.php">
 				<?php settings_fields( 'sws_fog_group' ); ?>
@@ -210,12 +228,13 @@ final class SWS_Fake_Order_Guard {
 				<input type="hidden" name="<?php echo esc_attr( $n ); ?>[_section]" value="main">
 				<?php submit_button( 'সেভ করুন' ); ?>
 			</form>
-			<?php $this->render_blocklist(); ?>
-			<hr style="margin:30px 0 20px">
+			<?php elseif ( 'blocklist' === $tab ) : ?>
+				<?php $this->render_blocklist(); ?>
+			<?php elseif ( 'capi' === $tab ) : ?>
 			<form method="post" action="options.php">
 				<?php settings_fields( 'sws_fog_group' ); ?>
 				<input type="hidden" name="<?php echo esc_attr( $n ); ?>[_section]" value="capi">
-				<h2>যাচাই করা অর্ডারে Facebook Purchase (Conversions API)</h2>
+				<h2 style="margin-top:0">যাচাই করা অর্ডারে Facebook Purchase (Conversions API)</h2>
 				<p style="max-width:820px">ক্যাশ অন ডেলিভারি বা ম্যানুয়াল বিকাশ/নগদে অর্ডার হলেই Purchase ইভেন্ট গেলে ফেক অর্ডারও Facebook-এ "সেল" হিসেবে গোনা হয়, আর অ্যাড ভুল অডিয়েন্স শেখে। এটা চালু করলে Purchase ইভেন্ট যাবে শুধু তখন, যখন আপনি অর্ডার যাচাই করে নিচের স্ট্যাটাসে নেবেন। ইভেন্ট সার্ভার থেকে সরাসরি Meta-তে যায়, তাই অ্যাড ব্লকারেও আটকায় না।</p>
 				<table class="form-table" role="presentation">
 					<tr><th scope="row">চালু করুন</th><td><label><input type="checkbox" name="<?php echo esc_attr( $n ); ?>[capi_enabled]" value="1" <?php checked( $o['capi_enabled'], 1 ); ?>> যাচাই করা অর্ডারে Purchase ইভেন্ট পাঠান</label></td></tr>
@@ -231,7 +250,10 @@ final class SWS_Fake_Order_Guard {
 				</table>
 				<?php submit_button( 'সেভ করুন' ); ?>
 			</form>
-			<p style="color:#787c82">Developed by <a href="https://sabbirwebsolutions.com" target="_blank" rel="noopener">Sabbir Web Solutions</a></p>
+			<?php elseif ( 'incomplete' === $tab && class_exists( 'SWS_FOG_Incomplete' ) ) : ?>
+				<?php SWS_FOG_Incomplete::instance()->render_page(); ?>
+			<?php endif; ?>
+			<p style="color:#787c82;margin-top:30px">Developed by <a href="https://sabbirwebsolutions.com" target="_blank" rel="noopener">Sabbir Web Solutions</a></p>
 		</div>
 		<?php
 	}
@@ -325,8 +347,7 @@ final class SWS_Fake_Order_Guard {
 		$paged = isset( $_GET['fog_p'] ) ? max( 1, min( $pages, (int) $_GET['fog_p'] ) ) : 1; // phpcs:ignore
 		$rows  = array_slice( $all, ( $paged - 1 ) * self::PER_PAGE, self::PER_PAGE, true );
 		?>
-		<hr style="margin:30px 0 20px">
-		<h2 id="sws-fog-blocklist">ব্লক করা নম্বর (<?php echo esc_html( self::bn( count( self::blocklist() ) ) ); ?>টি)</h2>
+		<h2 id="sws-fog-blocklist" style="margin-top:0">ব্লক করা নম্বর (<?php echo esc_html( self::bn( count( self::blocklist() ) ) ); ?>টি)</h2>
 		<p>এই লিস্টের কোনো নম্বর দিয়ে ওয়েবসাইটে অর্ডার করা যাবে না। লিস্ট থেকে রিমুভ করলে আবার অর্ডার করা যাবে। অর্ডার লিস্টের <b>ফেক গার্ড</b> কলাম থেকেও এক ক্লিকে ব্লক/আনব্লক করা যায়।</p>
 
 		<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="max-width:640px;margin-bottom:20px">
@@ -340,9 +361,10 @@ final class SWS_Fake_Order_Guard {
 
 		<form method="get" style="margin-bottom:10px">
 			<input type="hidden" name="page" value="sws-fake-order-guard">
+			<input type="hidden" name="tab" value="blocklist">
 			<input type="search" name="fog_s" value="<?php echo esc_attr( $s ); ?>" placeholder="নম্বর খুঁজুন">
 			<button class="button">খুঁজুন</button>
-			<?php if ( '' !== $s ) : ?><a class="button-link" href="<?php echo esc_url( self::page_url() . '#sws-fog-blocklist' ); ?>">সব দেখুন</a><?php endif; ?>
+			<?php if ( '' !== $s ) : ?><a class="button-link" href="<?php echo esc_url( self::page_url( array( 'tab' => 'blocklist' ) ) ); ?>">সব দেখুন</a><?php endif; ?>
 		</form>
 
 		<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
@@ -388,7 +410,7 @@ final class SWS_Fake_Order_Guard {
 		if ( $pages > 1 ) {
 			echo '<p class="sws-fog-pages">';
 			for ( $i = 1; $i <= $pages; $i++ ) {
-				$url = self::page_url( array_filter( array( 'fog_p' => $i, 'fog_s' => $s ) ) ) . '#sws-fog-blocklist';
+				$url = self::page_url( array_filter( array( 'tab' => 'blocklist', 'fog_p' => $i, 'fog_s' => $s ) ) );
 				echo $i === $paged ? '<span class="button button-primary button-small">' . esc_html( $i ) . '</span> ' : '<a class="button button-small" href="' . esc_url( $url ) . '">' . esc_html( $i ) . '</a> ';
 			}
 			echo '</p>';
