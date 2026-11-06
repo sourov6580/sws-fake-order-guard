@@ -176,10 +176,10 @@ final class SWS_FOG_Orders {
 			}
 			$c = &$out[ $key ];
 			++$c['count'];
-			if ( 'wc-completed' === $r->st ) {
+			if ( 'wc-completed' === $r->st || 'wc-processing' === $r->st ) {
 				++$c['done'];
 				$c['value'] += (float) $r->total;
-				$c['ids'][]   = (int) $r->id; // product list: completed orders only.
+				$c['ids'][]   = (int) $r->id; // product list: completed + processing orders.
 			}
 			if ( $ts >= $c['last'] ) {
 				$name = trim( $r->fn . ' ' . $r->ln );
@@ -257,6 +257,20 @@ final class SWS_FOG_Orders {
 		return count( $w ) > $words ? implode( ' ', array_slice( $w, 0, $words ) ) . '...' : (string) $text;
 	}
 
+	/** Auto quality from success rate: below 50% Low, 50-80% Medium, above 80% High. */
+	public static function auto_quality( $c ) {
+		if ( empty( $c['count'] ) ) {
+			return '';
+		}
+		$pct = $c['done'] * 100 / $c['count'];
+		return $pct > 80 ? 'high' : ( $pct >= 50 ? 'medium' : 'low' );
+	}
+
+	/** Manual choice wins; otherwise the auto quality. */
+	private static function quality_of( $c, $qmap ) {
+		return isset( $qmap[ $c['key'] ], self::qualities()[ $qmap[ $c['key'] ] ] ) ? $qmap[ $c['key'] ] : self::auto_quality( $c );
+	}
+
 	public static function quality_map() {
 		$q = get_option( self::QOPT, array() );
 		return is_array( $q ) ? $q : array();
@@ -304,7 +318,7 @@ final class SWS_FOG_Orders {
 		header( 'Content-Disposition: attachment; filename="' . $file . '"' );
 		$fh = fopen( 'php://output', 'w' );
 		fwrite( $fh, "\xEF\xBB\xBF" ); // UTF-8 BOM so Excel shows Bangla correctly.
-		fputcsv( $fh, array( 'নাম', 'মোবাইল নম্বর', 'ঠিকানা', 'অর্ডার সংখ্যা', 'কমপ্লিট', 'অর্ডার ভ্যালু', 'পন্য তালিকা', 'লাস্ট অর্ডার ডেট', 'কাস্টমার কোয়ালিটি' ) );
+		fputcsv( $fh, array( 'নাম', 'মোবাইল নম্বর', 'ঠিকানা', 'অর্ডার সংখ্যা', 'কমপ্লিট + প্রসেসিং', 'অর্ডার ভ্যালু', 'পন্য তালিকা', 'লাস্ট অর্ডার ডেট', 'কাস্টমার কোয়ালিটি' ) );
 		foreach ( $list as $c ) {
 			fputcsv(
 				$fh,
@@ -317,7 +331,7 @@ final class SWS_FOG_Orders {
 					round( $c['value'], 2 ),
 					self::csv_safe( $c['products'] ),
 					wp_date( 'Y-m-d H:i', $c['last'] ),
-					isset( $qmap[ $c['key'] ], $qs[ $qmap[ $c['key'] ] ] ) ? $qs[ $qmap[ $c['key'] ] ] : '',
+					( $eq = self::quality_of( $c, $qmap ) ) ? $qs[ $eq ] . ( isset( $qmap[ $c['key'] ] ) ? '' : ' (অটো)' ) : '',
 				)
 			);
 		}
@@ -358,8 +372,9 @@ final class SWS_FOG_Orders {
 		$export = wp_nonce_url( add_query_arg( array_merge( $base, array( 'action' => 'sws_fog_orders_export' ) ), admin_url( 'admin-post.php' ) ), 'sws_fog_orders_export' );
 		$count  = array( 'high' => 0, 'medium' => 0, 'low' => 0 );
 		foreach ( $list as $c ) {
-			if ( isset( $qmap[ $c['key'] ], $count[ $qmap[ $c['key'] ] ] ) ) {
-				++$count[ $qmap[ $c['key'] ] ];
+			$eq = self::quality_of( $c, $qmap );
+			if ( isset( $count[ $eq ] ) ) {
+				++$count[ $eq ];
 			}
 		}
 		?>
@@ -375,6 +390,7 @@ final class SWS_FOG_Orders {
 				.sws-om .sws-dd-menu a.cur{font-weight:600;color:#2271b1}
 				.sws-om .sws-q{display:inline-flex;border-radius:4px;overflow:hidden;border:1px solid #c3c4c7;background:#f6f7f7}
 				.sws-om .sws-q button{border:0;background:transparent;cursor:pointer;font-size:12px;line-height:26px;padding:0 10px;color:#50575e}
+				.sws-om .sws-q .sws-q-auto{font-weight:400;opacity:.7;font-size:10px}
 				.sws-om .sws-q .sws-q-arrow{border-left:1px solid rgba(0,0,0,.15);padding:0 7px}
 				.sws-om .sws-q.q-high{background:#e7f6ea;border-color:#68b97a}.sws-om .sws-q.q-high button{color:#1a7f37;font-weight:600}
 				.sws-om .sws-q.q-medium{background:#fcf0e3;border-color:#e0a458}.sws-om .sws-q.q-medium button{color:#9a5b13;font-weight:600}
@@ -408,8 +424,8 @@ final class SWS_FOG_Orders {
 			<div class="sws-om-stats">
 				<div class="sws-om-stat"><small>কাস্টমার</small><b><?php echo (int) $total; ?></b></div>
 				<div class="sws-om-stat"><small>মোট অর্ডার</small><b><?php echo (int) $orders; ?></b></div>
-				<div class="sws-om-stat"><small>কমপ্লিট</small><b><?php echo (int) $done; ?></b></div>
-				<div class="sws-om-stat"><small>কমপ্লিট অর্ডার ভ্যালু</small><b><?php echo wp_kses_post( wc_price( $value ) ); ?></b></div>
+				<div class="sws-om-stat"><small>কমপ্লিট + প্রসেসিং</small><b><?php echo (int) $done; ?></b></div>
+				<div class="sws-om-stat"><small>অর্ডার ভ্যালু (কমপ্লিট + প্রসেসিং)</small><b><?php echo wp_kses_post( wc_price( $value ) ); ?></b></div>
 				<div class="sws-om-stat"><small>High</small><b style="color:#1a7f37"><?php echo (int) $count['high']; ?></b></div>
 				<div class="sws-om-stat"><small>Medium</small><b style="color:#9a5b13"><?php echo (int) $count['medium']; ?></b></div>
 				<div class="sws-om-stat"><small>Low</small><b style="color:#b32d2e"><?php echo (int) $count['low']; ?></b></div>
@@ -417,7 +433,7 @@ final class SWS_FOG_Orders {
 
 			<table class="wp-list-table widefat fixed striped">
 				<thead><tr>
-					<th>নাম</th><th style="width:130px">মোবাইল নম্বর</th><th>ঠিকানা</th><th style="width:100px">অর্ডার সংখ্যা</th><th style="width:80px">কমপ্লিট</th><th style="width:100px">অর্ডার ভ্যালু</th><th style="width:150px">পন্য তালিকা</th><th style="width:150px">লাস্ট অর্ডার ডেট</th><th style="width:160px">কাস্টমার কোয়ালিটি</th>
+					<th>নাম</th><th style="width:130px">মোবাইল নম্বর</th><th>ঠিকানা</th><th style="width:100px">অর্ডার সংখ্যা</th><th style="width:95px">কমপ্লিট + প্রসেসিং</th><th style="width:100px">অর্ডার ভ্যালু</th><th style="width:150px">পন্য তালিকা</th><th style="width:150px">লাস্ট অর্ডার ডেট</th><th style="width:160px">কাস্টমার কোয়ালিটি</th>
 				</tr></thead>
 				<tbody>
 				<?php if ( ! $rows ) : ?>
@@ -425,7 +441,9 @@ final class SWS_FOG_Orders {
 				<?php endif; ?>
 				<?php
 				foreach ( $rows as $c ) :
-					$q   = isset( $qmap[ $c['key'] ], $qs[ $qmap[ $c['key'] ] ] ) ? $qmap[ $c['key'] ] : '';
+					$manual = isset( $qmap[ $c['key'] ], $qs[ $qmap[ $c['key'] ] ] );
+					$auto   = self::auto_quality( $c );
+					$q      = $manual ? $qmap[ $c['key'] ] : $auto;
 					$ord = admin_url( 'post.php?post=' . (int) $c['order_id'] . '&action=edit' );
 					if ( self::hpos() ) {
 						$ord = admin_url( 'admin.php?page=wc-orders&action=edit&id=' . (int) $c['order_id'] );
@@ -446,15 +464,15 @@ final class SWS_FOG_Orders {
 						<td><a href="<?php echo esc_url( $ord ); ?>"><?php echo esc_html( wp_date( 'j M Y', $c['last'] ) ); ?></a><br><small><?php echo esc_html( wp_date( 'g:i a', $c['last'] ) ); ?></small></td>
 						<td>
 							<div class="sws-dd">
-								<div class="sws-q<?php echo $q ? ' q-' . esc_attr( $q ) : ''; ?>" data-key="<?php echo esc_attr( $c['key'] ); ?>">
-									<button type="button" class="sws-dd-btn sws-q-label"><?php echo esc_html( $q ? $qs[ $q ] : 'সেট করুন' ); ?></button>
+								<div class="sws-q<?php echo $q ? ' q-' . esc_attr( $q ) : ''; ?>" data-key="<?php echo esc_attr( $c['key'] ); ?>" data-auto="<?php echo esc_attr( $auto ); ?>">
+									<button type="button" class="sws-dd-btn sws-q-label"><?php echo esc_html( $q ? $qs[ $q ] : 'সেট করুন' ); ?><?php if ( $q && ! $manual ) : ?><small class="sws-q-auto"> অটো</small><?php endif; ?></button>
 									<button type="button" class="sws-dd-btn sws-q-arrow" aria-label="কোয়ালিটি বাছাই">▾</button>
 								</div>
 								<div class="sws-dd-menu">
 									<?php foreach ( $qs as $k => $l ) : ?>
-										<a href="#" class="sws-q-opt<?php echo $k === $q ? ' cur' : ''; ?>" data-q="<?php echo esc_attr( $k ); ?>"><?php echo esc_html( $l ); ?></a>
+										<a href="#" class="sws-q-opt<?php echo $manual && $k === $q ? ' cur' : ''; ?>" data-q="<?php echo esc_attr( $k ); ?>"><?php echo esc_html( $l ); ?></a>
 									<?php endforeach; ?>
-									<a href="#" class="sws-q-opt" data-q="" style="color:#787c82;border-top:1px solid #f0f0f1">মুছে ফেলুন</a>
+									<a href="#" class="sws-q-opt" data-q="" style="color:#787c82;border-top:1px solid #f0f0f1">অটো করুন</a>
 								</div>
 							</div>
 						</td>
@@ -476,7 +494,7 @@ final class SWS_FOG_Orders {
 					?>
 				</div></div>
 			<?php endif; ?>
-			<p class="description" style="margin-top:12px">একই মোবাইল নম্বরের সব অর্ডার একজন কাস্টমার হিসেবে গোনা হয়। নম্বর না থাকলে ইমেইল দিয়ে, তাও না থাকলে অর্ডারটা আলাদা কাস্টমার হিসেবে দেখায়। নাম ও ঠিকানা নেওয়া হয় সর্বশেষ অর্ডার থেকে। ট্র্যাশ ও ড্রাফট অর্ডার বাদ।</p>
+			<p class="description" style="margin-top:12px">একই মোবাইল নম্বরের সব অর্ডার একজন কাস্টমার হিসেবে গোনা হয়। কোয়ালিটি নিজে থেকে বসে (কমপ্লিট + প্রসেসিং ৫০%-এর নিচে Low, ৫০-৮০% Medium, ৮০%-এর উপরে High); হাতে বদলালে সেটাই থাকবে, "অটো করুন" দিলে আবার নিজে থেকে হিসাব হবে। নম্বর না থাকলে ইমেইল দিয়ে, তাও না থাকলে অর্ডারটা আলাদা কাস্টমার হিসেবে দেখায়। নাম ও ঠিকানা নেওয়া হয় সর্বশেষ অর্ডার থেকে। ট্র্যাশ ও ড্রাফট অর্ডার বাদ।</p>
 		</div>
 		<script>
 		(function(){
@@ -493,8 +511,10 @@ final class SWS_FOG_Orders {
 					var f = new FormData(); f.append('action','sws_fog_quality'); f.append('nonce',nonce); f.append('key',box.dataset.key); f.append('q',q);
 					fetch(ajax,{method:'POST',body:f,credentials:'same-origin'}).then(function(r){ return r.json(); }).then(function(r){
 						if (!r || !r.success) { alert('সেভ করা যায়নি, আবার চেষ্টা করুন।'); return; }
-						box.className = 'sws-q' + (q ? ' q-' + q : '');
-						box.querySelector('.sws-q-label').textContent = q ? labels[q] : 'সেট করুন';
+						var eff = q || box.dataset.auto, lbl = box.querySelector('.sws-q-label');
+						box.className = 'sws-q' + (eff ? ' q-' + eff : '');
+						lbl.textContent = eff ? labels[eff] : 'সেট করুন';
+						if (!q && eff) { var sm = document.createElement('small'); sm.className = 'sws-q-auto'; sm.textContent = ' অটো'; lbl.appendChild(sm); }
 						dd.querySelectorAll('.sws-q-opt').forEach(function(a){ a.classList.toggle('cur', !!q && a.dataset.q === q); });
 					}).catch(function(){ alert('সেভ করা যায়নি, আবার চেষ্টা করুন।'); });
 					dd.classList.remove('open');

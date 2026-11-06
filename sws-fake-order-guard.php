@@ -3,7 +3,7 @@
  * Plugin Name:       SWS Fake Order Guard
  * Plugin URI:        https://sabbirwebsolutions.com
  * Description:       WooCommerce ফেক অর্ডার প্রতিরোধ: মোবাইল নম্বর যাচাই, একই নম্বর/IP থেকে নির্দিষ্ট সময়ে অর্ডারের লিমিট, ফোন নম্বর ব্লকলিস্ট, টেস্ট/এলোমেলো লেখা দিয়ে অর্ডার ব্লক, শুধু যাচাই করা অর্ডারে Facebook Purchase ইভেন্ট (Conversions API), এবং অসম্পূর্ণ অর্ডার (Incomplete Orders) সেভ করে কল/WhatsApp দিয়ে উদ্ধার।
- * Version:           1.4.4
+ * Version:           1.4.5
  * Author:            Sabbir Web Solutions
  * Author URI:        https://sabbirwebsolutions.com
  * Requires at least: 6.0
@@ -24,7 +24,7 @@ require_once __DIR__ . '/includes/class-sws-fog-orders.php';
 final class SWS_Fake_Order_Guard {
 
 	const OPT     = 'sws_fog_settings';
-	const VERSION = '1.4.4';
+	const VERSION = '1.4.5';
 	const CAPI_VER = 'v22.0';
 	const BL      = 'sws_fog_blocklist';
 	const PER_PAGE = 50;
